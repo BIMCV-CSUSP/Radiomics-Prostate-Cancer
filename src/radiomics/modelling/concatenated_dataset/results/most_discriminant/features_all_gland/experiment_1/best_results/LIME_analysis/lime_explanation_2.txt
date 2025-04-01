@@ -1,0 +1,15 @@
+=== LIME Explanation (instancia índice: 228) ===
+Predicción del modelo: [1]
+Probabilidades: [[0.30418369 0.69581631]]
+
+Importancia local de las features:
+  dwi_wavelet2-LH_glcm_Imc2 > 0.64: 0.1090
+  dwi_wavelet2-LL_glszm_GrayLevelNonUniformity <= -0.68: 0.0987
+  dwi_square_glrlm_GrayLevelVariance > 0.06: 0.0971
+  dwi_square_glszm_GrayLevelVariance > 0.07: -0.0849
+  dwi_log-sigma-3-mm-3D_glcm_ClusterShade <= 0.11: 0.0830
+  dwi_square_glszm_HighGrayLevelZoneEmphasis > 0.19: -0.0825
+  dwi_exponential_glcm_Imc1 <= -0.76: 0.0810
+  dwi_wavelet2-LH_glcm_MCC > 0.50: -0.0772
+  dwi_log-sigma-2-mm-3D_glrlm_GrayLevelNonUniformity <= -0.71: -0.0662
+  dwi_squareroot_glrlm_GrayLevelNonUniformity <= -0.68: -0.0648

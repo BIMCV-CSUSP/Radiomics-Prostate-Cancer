@@ -1,0 +1,15 @@
+=== LIME Explanation (instancia índice: 111) ===
+Predicción del modelo: [1]
+Probabilidades: [[0.25063798 0.74936202]]
+
+Importancia local de las features:
+  dwi_square_firstorder_Skewness > 0.14: 0.1654
+  dwi_exponential_ngtdm_Complexity > -0.14: 0.1390
+  dwi_square_glszm_SizeZoneNonUniformityNormalized > 0.61: 0.1339
+  dwi_log-sigma-3-mm-3D_firstorder_Skewness <= -0.31: 0.1311
+  dwi_exponential_glcm_ClusterProminence > -0.13: -0.1228
+  dwi_original_firstorder_Kurtosis > -0.00: -0.1042
+  dwi_log-sigma-2-mm-3D_firstorder_Kurtosis > 0.02: -0.0998
+  dwi_square_glszm_GrayLevelVariance > 0.07: -0.0837
+  dwi_square_glszm_HighGrayLevelZoneEmphasis > 0.19: -0.0823
+  dwi_square_firstorder_Kurtosis > -0.07: -0.0803

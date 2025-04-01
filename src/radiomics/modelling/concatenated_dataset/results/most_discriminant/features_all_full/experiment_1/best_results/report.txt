@@ -1,0 +1,70 @@
+=== Fine-tuning del modelo SVM ===
+
+Mejores parámetros (según roc_auc): OrderedDict([('svc__C', 1.577002771064631), ('svc__coef0', 0.3023699237817654), ('svc__gamma', 841.8209988613213), ('svc__kernel', 'linear')])
+
+=== Resultados CV (BayesSearch) ===
+  CV roc_auc: 0.596 +/- 0.032
+  CV f1: 0.095 +/- 0.016
+  CV balanced_accuracy: 0.523 +/- 0.006
+
+=== Evaluación en Test (NO calibrado) ===
+  Figura de Confusion Matrix: /mnt/c/Users/jofut/OneDrive - UPV/Documentos/Documentos/Examenes/TFG/code/src/radiomics/modelling/concatenated_dataset/results/most_discriminant/features_all_full/experiment_1/best_results/confusion_matrix.png
+  AUC: 0.611
+  MCC: 0.126
+  Kappa: 0.062
+  F1: 0.108
+  Accuracy: 0.726
+  Sensitivity: 0.059
+  Specificity: 0.986
+  PPV: 0.625
+  NPV: 0.729
+  Balanced Accuracy: 0.523
+
+=== Classification Report ===
+              precision    recall  f1-score   support
+
+           0       0.73      0.99      0.84       218
+           1       0.62      0.06      0.11        85
+
+    accuracy                           0.73       303
+   macro avg       0.68      0.52      0.47       303
+weighted avg       0.70      0.73      0.63       303
+
+
+=== Ajuste de Umbral (Resultados con el mejor threshold) ===
+Resultados para cada threshold:
+Threshold: 0.10 - F1: 0.438
+Threshold: 0.20 - F1: 0.438
+Threshold: 0.30 - F1: 0.324
+Threshold: 0.40 - F1: 0.126
+Threshold: 0.50 - F1: 0.108
+Threshold: 0.60 - F1: 0.108
+Threshold: 0.70 - F1: 0.109
+Threshold: 0.80 - F1: 0.023
+Threshold: 0.90 - F1: 0.000
+
+Mejor threshold seleccionado (según F1): 0.10
+
+Classification Report (con threshold 0.10):
+              precision    recall  f1-score   support
+
+           0       0.00      0.00      0.00       218
+           1       0.28      1.00      0.44        85
+
+    accuracy                           0.28       303
+   macro avg       0.14      0.50      0.22       303
+weighted avg       0.08      0.28      0.12       303
+
+AUC: 0.611
+MCC: 0.000
+Kappa: 0.000
+F1: 0.438
+Accuracy: 0.281
+Sensitivity: 1.000
+Specificity: 0.000
+PPV: 0.281
+NPV: 0.000
+Balanced Accuracy: 0.500
+
+Confusion Matrix (Calibrado con threshold=0.10) fig: /mnt/c/Users/jofut/OneDrive - UPV/Documentos/Documentos/Examenes/TFG/code/src/radiomics/modelling/concatenated_dataset/results/most_discriminant/features_all_full/experiment_1/best_results/calibration/confusion_matrix_best_threshold.png
+

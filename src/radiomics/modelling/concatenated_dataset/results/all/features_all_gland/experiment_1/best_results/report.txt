@@ -1,0 +1,70 @@
+=== Fine-tuning del modelo GradientBoosting ===
+
+Mejores parámetros (según roc_auc): OrderedDict([('gradientboostingclassifier__learning_rate', 0.00400297404454232), ('gradientboostingclassifier__max_depth', 3), ('gradientboostingclassifier__max_features', 'sqrt'), ('gradientboostingclassifier__n_estimators', 608), ('gradientboostingclassifier__subsample', 0.8651285001403586)])
+
+=== Resultados CV (BayesSearch) ===
+  CV roc_auc: 0.787 +/- 0.011
+  CV f1: 0.440 +/- 0.039
+  CV balanced_accuracy: 0.634 +/- 0.017
+
+=== Evaluación en Test (NO calibrado) ===
+  Figura de Confusion Matrix: /mnt/c/Users/jofut/OneDrive - UPV/Documentos/Documentos/Examenes/TFG/code/src/radiomics/modelling/concatenated_dataset/results/all/features_all_gland/experiment_1/best_results/confusion_matrix.png
+  AUC: 0.857
+  MCC: 0.474
+  Kappa: 0.444
+  F1: 0.556
+  Accuracy: 0.805
+  Sensitivity: 0.435
+  Specificity: 0.950
+  PPV: 0.771
+  NPV: 0.812
+  Balanced Accuracy: 0.692
+
+=== Classification Report ===
+              precision    recall  f1-score   support
+
+           0       0.81      0.95      0.88       218
+           1       0.77      0.44      0.56        85
+
+    accuracy                           0.81       303
+   macro avg       0.79      0.69      0.72       303
+weighted avg       0.80      0.81      0.79       303
+
+
+=== Ajuste de Umbral (Resultados con el mejor threshold) ===
+Resultados para cada threshold:
+Threshold: 0.10 - F1: 0.496
+Threshold: 0.20 - F1: 0.639
+Threshold: 0.30 - F1: 0.650
+Threshold: 0.40 - F1: 0.659
+Threshold: 0.50 - F1: 0.567
+Threshold: 0.60 - F1: 0.488
+Threshold: 0.70 - F1: 0.299
+Threshold: 0.80 - F1: 0.023
+Threshold: 0.90 - F1: 0.000
+
+Mejor threshold seleccionado (según F1): 0.40
+
+Classification Report (con threshold 0.40):
+              precision    recall  f1-score   support
+
+           0       0.86      0.88      0.87       218
+           1       0.67      0.65      0.66        85
+
+    accuracy                           0.81       303
+   macro avg       0.77      0.76      0.76       303
+weighted avg       0.81      0.81      0.81       303
+
+AUC: 0.853
+MCC: 0.529
+Kappa: 0.529
+F1: 0.659
+Accuracy: 0.812
+Sensitivity: 0.647
+Specificity: 0.876
+PPV: 0.671
+NPV: 0.864
+Balanced Accuracy: 0.762
+
+Confusion Matrix (Calibrado con threshold=0.40) fig: /mnt/c/Users/jofut/OneDrive - UPV/Documentos/Documentos/Examenes/TFG/code/src/radiomics/modelling/concatenated_dataset/results/all/features_all_gland/experiment_1/best_results/calibration/confusion_matrix_best_threshold.png
+
