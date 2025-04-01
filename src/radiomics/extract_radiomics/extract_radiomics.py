@@ -29,7 +29,7 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 
-input_csv = "data_patients_more_than_one.csv"
+input_csv = "data.csv"
 pre_path = "/projects/ceib/data_picai/"
 
 t2_features_gland_csv  = "mod_features_t2_gland.csv"

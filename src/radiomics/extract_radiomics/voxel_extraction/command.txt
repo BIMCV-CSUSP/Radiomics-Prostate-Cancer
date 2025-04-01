@@ -1,0 +1,5 @@
+pyradiomics secuencia_T2.csv \
+  -o results_T2 \
+  -f csv \
+  -p Params_T2w_voxel.yaml \
+  --mode voxel
