@@ -1,0 +1,17 @@
+=== LIME Explanation para FP (índice: 7) ===
+
+Clase real: 0
+Predicción del modelo: 1
+Probabilidades: [[0.31498837 0.68501163]]
+
+Importancia local de las features:
+  dwi_square_firstorder_Skewness > 0.14: 0.1614
+  dwi_wavelet2-LH_glcm_Imc2 > 0.64: 0.1281
+  t2_original_glszm_GrayLevelNonUniformity > 0.42: -0.1249
+  dwi_exponential_glcm_ClusterProminence > -0.13: -0.1220
+  dwi_exponential_glrlm_GrayLevelNonUniformity > 0.52: 0.1192
+  adc_logarithm_glrlm_GrayLevelNonUniformity > 0.42: -0.1139
+  dwi_log-sigma-2-mm-3D_firstorder_Kurtosis > 0.02: -0.1138
+  dwi_square_glszm_GrayLevelVariance > 0.07: -0.1038
+  dwi_original_firstorder_Kurtosis > -0.00: -0.1033
+  dwi_square_firstorder_Kurtosis > -0.07: -0.0937

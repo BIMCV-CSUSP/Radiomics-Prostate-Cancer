@@ -1,3 +1,0 @@
-Fila 1: patient_id: 10029, study_id: 1000029
-Fila 2: patient_id: 10000, study_id: 1000000
-
