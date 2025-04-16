@@ -1,0 +1,16 @@
+=================================
+TEST DE FRIEDMAN por paciente | métrica: prob_class_1
+Estadístico: 592.2046, p-value: 2.5375e-129
+alpha = 0.05
+=> HAY diferencias estadísticamente significativas entre los modelos (rechazamos H0).
+=================================
+
+Resultados comparaciones 2 a 2 (Wilcoxon + Holm):
+    base-densenet vs base-resnet: p‑valor corregido = 1.3629e-18
+    base-densenet vs base-efficientnet: p‑valor corregido = 2.8460e-60
+    base-resnet vs base-efficientnet: p‑valor corregido = 2.6466e-28
+
+Comparaciones con diferencia significativa:
+    base-densenet vs base-resnet: p‑valor corregido = 1.3629e-18
+    base-densenet vs base-efficientnet: p‑valor corregido = 2.8460e-60
+    base-resnet vs base-efficientnet: p‑valor corregido = 2.6466e-28

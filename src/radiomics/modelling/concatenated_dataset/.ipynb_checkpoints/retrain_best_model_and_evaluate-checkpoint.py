@@ -213,26 +213,26 @@ def main():
     print("\nOptimización completada.")
     print(f"  --> Mejores parámetros: {search.best_params_}")
 
-    estimator_path = os.path.join(output_parent_dir, "best_estimator.pkl")
-    joblib.dump(best_estimator, estimator_path)
-    print(f"  --> Mejor estimador guardado en: {os.path.relpath(estimator_path)}")
+    # estimator_path = os.path.join(output_parent_dir, "best_estimator.pkl")
+    # joblib.dump(best_estimator, estimator_path)
+    # print(f"  --> Mejor estimador guardado en: {os.path.relpath(estimator_path)}")
 
-    # best_estimator = joblib.load(os.path.join(output_parent_dir, "best_estimator.pkl"))
+    best_estimator = joblib.load(os.path.join(output_parent_dir, "best_estimator.pkl"))
     
     # ----------------------------------------------------------------------
     # 5) GUARDAR REPORTE EN "report.txt"
     # ----------------------------------------------------------------------
     report_path = os.path.join(output_parent_dir, "report.txt")
-    with open(report_path, "w", encoding="utf-8") as f_out:
-        f_out.write(f"=== Fine-tuning del modelo {selected_model} ===\n\n")
-        f_out.write(f"Mejores parámetros (según {score_refit_str}): {search.best_params_}\n\n")
-        f_out.write("=== Resultados CV (BayesSearch) ===\n")
-        idx_best = search.best_index_
-        for key in score_group:
-            mean_test = search.cv_results_[f'mean_test_{key}'][idx_best]
-            std_test  = search.cv_results_[f'std_test_{key}'][idx_best]
-            f_out.write(f"  CV {key}: {mean_test:.3f} +/- {std_test:.3f}\n")
-        f_out.write("\n")
+    # with open(report_path, "w", encoding="utf-8") as f_out:
+    #     f_out.write(f"=== Fine-tuning del modelo {selected_model} ===\n\n")
+    #     f_out.write(f"Mejores parámetros (según {score_refit_str}): {search.best_params_}\n\n")
+    #     f_out.write("=== Resultados CV (BayesSearch) ===\n")
+    #     idx_best = search.best_index_
+    #     for key in score_group:
+    #         mean_test = search.cv_results_[f'mean_test_{key}'][idx_best]
+    #         std_test  = search.cv_results_[f'std_test_{key}'][idx_best]
+    #         f_out.write(f"  CV {key}: {mean_test:.3f} +/- {std_test:.3f}\n")
+    #     f_out.write("\n")
     
     # ----------------------------------------------------------------------
     # 6) EVALUAR EN TEST
@@ -477,10 +477,10 @@ def main():
             explainer = shap.KernelExplainer(model_clf.predict_proba, background)
         
         # Calcular los valores SHAP
-        shap_values = explainer(X_transformed)
-        joblib.dump(shap_values, os.path.join(shap_dir, 'shap_values.pkl'))
+        # shap_values = explainer(X_transformed)
+        # joblib.dump(shap_values, os.path.join(shap_dir, 'shap_values.pkl'))
 
-        # shap_values = joblib.load(os.path.join(shap_dir, 'shap_values.pkl'))
+        shap_values = joblib.load(os.path.join(shap_dir, 'shap_values.pkl'))
         
         if shap_values.values.ndim > 2:
             shap_values = shap_values[:,:,1]
@@ -756,7 +756,6 @@ def main():
             discretize_continuous=True,
             random_state=42
         )
-
         resultados = []
         
         # 2) Iteramos en múltiples instancias
@@ -802,13 +801,28 @@ def main():
         df_lime_top15['valor_min'] = df_lime_top15.groupby('feature')['valor_feature'].transform('min')
         df_lime_top15['valor_max'] = df_lime_top15.groupby('feature')['valor_feature'].transform('max')
         
+        # Normalización min-max (0-1)
         df_lime_top15['valor_feature_norm'] = (
             (df_lime_top15['valor_feature'] - df_lime_top15['valor_min'])
             / (df_lime_top15['valor_max'] - df_lime_top15['valor_min'])
         )
-
+        
+        # Normalización logarítmica
+        # Primero aseguramos que todos los valores sean positivos para evitar problemas con el log
+        df_lime_top15['valor_feature_shifted'] = df_lime_top15.groupby('feature')['valor_feature'].transform(
+            lambda x: x - x.min() + 1e-10 if x.min() <= 0 else x
+        )
+        # Aplicamos transformación logarítmica
+        df_lime_top15['valor_feature_log'] = np.log1p(df_lime_top15['valor_feature_shifted'])
+        # Normalizamos los valores logarítmicos entre 0 y 1
+        df_lime_top15['valor_feature_log_min'] = df_lime_top15.groupby('feature')['valor_feature_log'].transform('min')
+        df_lime_top15['valor_feature_log_max'] = df_lime_top15.groupby('feature')['valor_feature_log'].transform('max')
+        df_lime_top15['valor_feature_log_norm'] = (
+            (df_lime_top15['valor_feature_log'] - df_lime_top15['valor_feature_log_min'])
+            / (df_lime_top15['valor_feature_log_max'] - df_lime_top15['valor_feature_log_min'])
+        )
+        
         shap_order = list(top_features_shap)
-
         # Extraemos las variables únicas de LIME (orden en que aparecieron, por ejemplo)
         lime_features = df_lime_top15['feature'].unique().tolist()
         
@@ -817,11 +831,8 @@ def main():
         #  - Luego, las que están en LIME y no en SHAP (se añaden al final)
         final_order = [feat for feat in shap_order if feat in lime_features] + \
                       [feat for feat in lime_features if feat not in shap_order]
-
-        # 3) Hacemos el stripplot usando hue='valor_feature_norm' y una paleta continua
-        fig, ax = plt.subplots(figsize=(10,8))
-
-        # Graficamos stripplot con hue numérico
+                      
+        # Definimos colores comunes para ambos gráficos
         colors = [
             (0.0,  "#008afb"),
             (0.2, "#008afb"),  
@@ -829,9 +840,11 @@ def main():
             (1.0,  "#ff0052")  
         ]
         
-        # 2) Creamos el colormap con esas secciones
+        # Creamos el colormap con esas secciones
         the_cmap = LinearSegmentedColormap.from_list("my_cmap", colors)
-
+        
+        # 3) Hacemos el stripplot usando hue='valor_feature_norm' y una paleta continua (Normalización Min-Max)
+        fig, ax = plt.subplots(figsize=(10,8))
         sns.stripplot(
             data=df_lime_top15,
             x='peso',
@@ -848,7 +861,7 @@ def main():
         )
         
         ax.axvline(0, color='black', linestyle='--')
-        ax.set_title("Distribución de pesos LIME - Top 15 features")
+        ax.set_title("Distribución de pesos LIME - Top 15 features (Normalización Min-Max)")
         
         # Creamos un 'ScalarMappable' con la misma norma y colormap
         norm = mpl.colors.Normalize(vmin=0, vmax=1)
@@ -857,14 +870,49 @@ def main():
         
         # Añadimos la colorbar en la misma figura (robamos el espacio del ax)
         cbar = fig.colorbar(sm, ax=ax)
-        cbar.set_label("Valor_feature normalizado [0..1]")
+        cbar.set_label("Valor feature normalizado [0..1]")
         
         plt.tight_layout()
         fig_path = os.path.join(lime_dir, "lime_pseudo_beeswarm.png")
         plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
         plt.close()
-
-
+        
+        # Creamos el segundo gráfico con normalización logarítmica
+        fig, ax = plt.subplots(figsize=(10,8))
+        sns.stripplot(
+            data=df_lime_top15,
+            x='peso',
+            y='feature',
+            hue='valor_feature_log_norm',    
+            palette=the_cmap,          
+            hue_norm=(0, 1),             
+            orient='h',
+            size=5,
+            dodge=False,
+            legend=False,
+            order=final_order,
+            ax=ax
+        )
+        
+        ax.axvline(0, color='black', linestyle='--')
+        ax.set_title("Distribución de pesos LIME - Top 15 features (Normalización Logarítmica)")
+        
+        # Creamos un 'ScalarMappable' con la misma norma y colormap
+        norm = mpl.colors.Normalize(vmin=0, vmax=1)
+        sm = mpl.cm.ScalarMappable(cmap=the_cmap, norm=norm)
+        sm.set_array([])
+        
+        # Añadimos la colorbar en la misma figura
+        cbar = fig.colorbar(sm, ax=ax)
+        cbar.set_label("Valor feature norm. logarítmica [0..1]")
+        
+        plt.tight_layout()
+        fig_path_log = os.path.join(lime_dir, "lime_pseudo_beeswarm_log.png")
+        plt.savefig(fig_path_log, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        
+        print(f"  --> Visualización LIME (normalización min-max) guardada en: {fig_path}")
+        print(f"  --> Visualización LIME (normalización logarítmica) guardada en: {fig_path_log}")
         
         # 5) Generamos explicaciones locales para algunas instancias.
         ind_lime_dir = os.path.join(lime_dir, "individual_analysis")
@@ -877,14 +925,13 @@ def main():
             explainer=explainer_lime,
             lime_dir=ind_lime_dir
         )
-
     
     except Exception as e:
         with open(report_path, "a", encoding="utf-8") as f_out:
             f_out.write("\n=== LIME Analysis ===\n")
             f_out.write("No se pudo generar LIME (modelo no soportado o error):\n")
             f_out.write(f"  {repr(e)}\n\n")
-        print("Error en LIME analysis:", e)        
+        print("Error en LIME analysis:", e)      
         
     print(f"\nProceso finalizado. Report guardado en: {report_path}")
 
