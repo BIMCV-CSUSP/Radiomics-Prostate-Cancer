@@ -5,10 +5,14 @@ import numpy as np
 import pandas as pd
 from scipy.stats import friedmanchisquare, wilcoxon
 from statsmodels.stats.multitest import multipletests
+
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
 import scienceplots
+
+plt.style.use(['science', 'grid'])
+dpi = 300
 
 def perform_p_value_analysis(
     df: pd.DataFrame,
@@ -112,18 +116,25 @@ def perform_p_value_analysis(
     plt.ylabel(metric_col)
     plt.xticks(rotation=45, ha='right')
     boxplot_path = os.path.join(output_dir, f"boxplot_{metric_col}.png")
-    plt.savefig(boxplot_path, dpi=300, bbox_inches='tight')
+    plt.savefig(boxplot_path, dpi=dpi, bbox_inches='tight')
     plt.close()
     print(f"  → Boxplot guardado en: {boxplot_path}")
 
     # --- 7. Heatmap de p‑values ---
     if matriz_p is not None:
         fig, ax = plt.subplots(figsize=(8, 6))
-        cax = ax.imshow(matriz_p, interpolation='nearest', aspect='auto', cmap='viridis')
+        ax.grid(False)
+        cax = ax.imshow(matriz_p, interpolation='nearest', aspect='auto', cmap='cividis')
         ax.set_xticks(np.arange(len(modelos)))
         ax.set_yticks(np.arange(len(modelos)))
         ax.set_xticklabels(modelos, rotation=45, ha='right')
         ax.set_yticklabels(modelos)
+
+        ax.set_xticks(np.arange(-0.5, len(modelos), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(modelos), 1), minor=True)
+        ax.grid(which='minor', color='black', linestyle='--', linewidth=1)
+        ax.tick_params(which='minor', bottom=False, left=False)
+        
         for i in range(len(modelos)):
             for j in range(len(modelos)):
                 color = 'white' if matriz_p[i, j] < alpha else 'black'
@@ -131,7 +142,7 @@ def perform_p_value_analysis(
         fig.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
         plt.tight_layout()
         heatmap_path = os.path.join(output_dir, f"heatmap_pvalues_{metric_col}.png")
-        plt.savefig(heatmap_path, dpi=300)
+        plt.savefig(heatmap_path, dpi=dpi)
         plt.close()
         print(f"  → Heatmap p‑values guardado en: {heatmap_path}")
 
