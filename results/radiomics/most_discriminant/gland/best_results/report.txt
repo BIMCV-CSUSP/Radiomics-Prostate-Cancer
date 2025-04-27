@@ -1,0 +1,70 @@
+=== Fine-tuning del modelo LogisticRegression ===
+
+Mejores parámetros (según roc_auc): OrderedDict([('logisticregression__C', 0.21087223568826494), ('logisticregression__l1_ratio', 0.1), ('logisticregression__penalty', 'l2')])
+
+=== Resultados CV (BayesSearch) ===
+  CV roc_auc: 0.786 +/- 0.019
+  CV f1: 0.581 +/- 0.027
+  CV balanced_accuracy: 0.710 +/- 0.018
+
+=== Evaluación en Test (NO calibrado) ===
+  Figura de Confusion Matrix: /mnt/c/Users/jofut/OneDrive - UPV/Documentos/Documentos/Examenes/TFG/code/results/radiomics/most_discriminant/gland/best_results/confusion_matrix.png
+  AUC: 0.847
+  MCC: 0.553
+  Kappa: 0.545
+  F1: 0.688
+  Accuracy: 0.802
+  Sensitivity: 0.776
+  Specificity: 0.812
+  PPV: 0.617
+  NPV: 0.903
+  Balanced Accuracy: 0.794
+
+=== Classification Report ===
+              precision    recall  f1-score   support
+
+           0       0.90      0.81      0.86       218
+           1       0.62      0.78      0.69        85
+
+    accuracy                           0.80       303
+   macro avg       0.76      0.79      0.77       303
+weighted avg       0.82      0.80      0.81       303
+
+
+=== Ajuste de Umbral (Resultados con el mejor threshold) ===
+Resultados para cada threshold:
+Threshold: 0.10 - F1: 0.480
+Threshold: 0.20 - F1: 0.582
+Threshold: 0.30 - F1: 0.681
+Threshold: 0.40 - F1: 0.620
+Threshold: 0.50 - F1: 0.571
+Threshold: 0.60 - F1: 0.302
+Threshold: 0.70 - F1: 0.128
+Threshold: 0.80 - F1: 0.046
+Threshold: 0.90 - F1: 0.000
+
+Mejor threshold seleccionado (según F1): 0.30
+
+Classification Report (con threshold 0.30):
+              precision    recall  f1-score   support
+
+           0       0.90      0.82      0.86       218
+           1       0.62      0.75      0.68        85
+
+    accuracy                           0.80       303
+   macro avg       0.76      0.79      0.77       303
+weighted avg       0.82      0.80      0.81       303
+
+AUC: 0.847
+MCC: 0.544
+Kappa: 0.539
+F1: 0.681
+Accuracy: 0.802
+Sensitivity: 0.753
+Specificity: 0.821
+PPV: 0.621
+NPV: 0.895
+Balanced Accuracy: 0.787
+
+Confusion Matrix (Calibrado con threshold=0.30) fig: /mnt/c/Users/jofut/OneDrive - UPV/Documentos/Documentos/Examenes/TFG/code/results/radiomics/most_discriminant/gland/best_results/calibration/confusion_matrix_best_threshold.png
+

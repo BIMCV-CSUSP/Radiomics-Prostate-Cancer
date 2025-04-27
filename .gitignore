@@ -1,1 +1,4 @@
-src/radiomics/modelling/concatenated_dataset/results/all/features_all_gland/experiment_1/best_results/SHAP_analysis/shap_values.pkl
+notebooks/
+/artifacts/radiomics/concatenated_data/features_all_full.csv
+/artifacts/radiomics/concatenated_data/features_all_gland.csv
+/artifacts/deep_learning/gland/models/

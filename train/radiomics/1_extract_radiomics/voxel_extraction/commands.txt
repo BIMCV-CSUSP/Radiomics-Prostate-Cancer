@@ -1,0 +1,19 @@
+pyradiomics ../../CSVs/secuencia_T2.csv \
+  -o results_T2 \
+  -f csv \
+  -p ../../Params/Params_T2w_voxel.yaml \
+  --mode voxel
+
+
+pyradiomics ../../CSVs/secuencia_ADC.csv \
+  -o results_ADC \
+  -f csv \
+  -p ../../Params/Params_ADC_voxel.yaml \
+  --mode voxel
+
+
+pyradiomics ../../CSVs/secuencia_DWI.csv \
+  -o results_DWI \
+  -f csv \
+  -p ../../Params/Params_DWI_voxel.yaml \
+  --mode voxel
