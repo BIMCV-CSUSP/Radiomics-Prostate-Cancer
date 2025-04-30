@@ -1,4 +1,4 @@
-# Clasificación de la severidad del cáncer de próstata mediante IA y RMmp
+# Clasificación del cáncer de próstata con IA y RMmp
 
 Este Trabajo de Fin de Grado compara la radiómica y las técnicas de deep learning 
 en la clasificación de la severidad del cáncer de próstata mediante 
@@ -34,8 +34,8 @@ facilitar su integración clínica.
 Este estudio utiliza el conjunto de datos público del reto [PI-CAI](https://pi-cai.grand-challenge.org/) [1], 
 compuesto por 1.500 casos con sospecha de cáncer de próstata. 
 Para cada caso se emplean imágenes en plano axial de tres secuencias de 
-resonancia magnética: T2W, DWI y mapas ADC. También se utilizan segmentaciones 
-automáticas de la glándula prostática completa y una variable binaria que indica 
+resonancia magnética: T2W, DWI y ADC. También se utilizan segmentaciones 
+automáticas de la glándula prostática y una variable binaria que indica 
 la presencia o ausencia de cáncer clínicamente significativo, 
 definida como un grado ISUP ≥ 2.
 
