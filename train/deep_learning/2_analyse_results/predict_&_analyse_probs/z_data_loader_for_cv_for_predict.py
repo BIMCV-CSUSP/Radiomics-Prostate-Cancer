@@ -56,35 +56,28 @@ class MyDataLoader:
         self.all_data = all_data
         self.input_shape = input_shape
 
-        # TRANSFORMACIONES BASE
         self.base_transforms = [
-            # 1) Cargamos la imagen y la máscara
             LoadImaged(
                 keys=["t2", "adc", "dwi", "mask"],
                 image_only=True,
                 ensure_channel_first=True,
             ),
-            # 2) Resampleamos ADC y DWI y la máscara para que "coincidan" con t2
             ResampleToMatchd(
                 keys=["adc", "dwi", "mask"],
                 key_dst="t2",
                 mode=("bilinear", "bilinear", "nearest")
             ),
-            # 3) Redimensionamos (incluida la máscara)
             Resized(
                 keys=["t2", "adc", "dwi", "mask"],
                 spatial_size=self.input_shape,
                 mode=("trilinear", "trilinear", "trilinear", "nearest")
             ),
-            # 4) Aplicamos la máscara a t2, adc y dwi
             MaskIntensityd(
                 keys=["t2", "adc", "dwi"],
                 mask_key="mask",
                 select_fn=lambda x: x > 0.5
             ),
-            # 5) Normalizamos intensidades (ya solo en la zona enmascarada)
             ScaleIntensityd(keys=["t2", "adc", "dwi"], minv=0.0, maxv=1.0),
-            # 6) Concatenamos en un solo tensor 'image'
             ConcatItemsd(keys=["t2", "adc", "dwi"], name="image", dim=0),
             EnsureTyped(keys=["image"], track_meta=False),
         ]
@@ -93,12 +86,10 @@ class MyDataLoader:
         if transformations:
             self.augment_transforms.extend(transformations)
 
+        # A diferencia de los DataLoaders de train, aquí se selecciona tambien el patient_id
         self.select_items = [SelectItemsd(keys=["image", "label", "patient_id"])]
 
     def get_transforms(self, augment: bool = False):
-        """
-        Devuelve la lista de transformaciones base + (opcionalmente) augmentación.
-        """
         if augment:
             return transforms.Compose(
                 self.base_transforms + self.augment_transforms + self.select_items
@@ -107,7 +98,4 @@ class MyDataLoader:
             return transforms.Compose(self.base_transforms + self.select_items)
 
     def get_all_data(self):
-        """
-        Devuelve la lista con todos los diccionarios (sin hacer split).
-        """
         return self.all_data

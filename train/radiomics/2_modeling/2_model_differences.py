@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+Script para la comparación estadística de modelos de clasificación.
+
+Este script realiza tests estadísticos no paramétricos para determinar
+si existen diferencias significativas en el rendimiento de diferentes
+clasificadores, utilizando el test de Friedman como prueba global y
+el test de Wilcoxon con corrección para comparaciones múltiples como
+test post-hoc para comparaciones por pares.
+"""
+
 import argparse
 import os
 import pandas as pd
@@ -18,6 +28,15 @@ from scipy.stats import friedmanchisquare, wilcoxon
 from statsmodels.stats.multitest import multipletests
 
 def main():
+    """
+    Función principal que coordina el análisis estadístico comparativo de clasificadores.
+    - Carga datos de rendimiento de modelos
+    - Realiza el test global de Friedman
+    - Si es significativo, ejecuta comparaciones post-hoc por pares
+    - Genera visualizaciones de resultados
+    """
+
+    # --- Configuración de argumentos de línea de comandos ---    
     parser = argparse.ArgumentParser(
         description="Comparación estadística de clasificadores (test global y post-hoc)."
     )
@@ -29,35 +48,43 @@ def main():
 
     args = parser.parse_args()
     
+    # --- Carga de datos ---
     df_results = pd.read_csv(args.csv_results)
    
-    metric_col = args.metric
-    alpha = args.alpha
+    metric_col = args.metric  # Métrica a comparar (por defecto, AUC)
+    alpha = args.alpha        # Nivel de significancia para los tests
 
+    # Obtener lista de clasificadores y ordenar resultados
     classifiers = df_results["Classifier"].unique()
     df_results = df_results.sort_values(by=["Classifier", "Fold"])
 
+    # Crear tabla pivote: filas=folds, columnas=clasificadores, valores=métrica seleccionada
     pivot_df = df_results.pivot_table(
         index="Fold", 
         columns="Classifier", 
         values=metric_col
     )
 
+    # Verificar y manejar valores faltantes
     if pivot_df.isnull().any().any():
-        print("Advertencia: existen valores NaN en la tabla. Se pueden remover o imputar.")
+        print("Advertencia: existen valores NaN en la tabla.")
         pivot_df.dropna(axis=0, inplace=True)
     
+    # Ordenar clasificadores por su rendimiento mediano (descendente)
     median_auc_per_clf = df_results.groupby("Classifier")[metric_col].median().sort_values(ascending=False)
     ordered_classifiers = median_auc_per_clf.index.tolist()
     pivot_df = pivot_df[ordered_classifiers]
 
+    # --- Preparar datos para el test de Friedman ---
     data_for_friedman = []
     for clf in pivot_df.columns:
         data_for_friedman.append(pivot_df[clf].values)
 
-    # Test de Friedman
+    # --- Test de Friedman (test global) ---
+    # Determina si existe al menos una diferencia significativa entre todos los clasificadores
     stat, p_value = friedmanchisquare(*data_for_friedman)
 
+    # --- Generar texto de resumen para los resultados ---
     summary_text = []
     summary_text.append("=================================")
     summary_text.append(f"TEST DE FRIEDMAN para métrica: {metric_col}")
@@ -70,49 +97,57 @@ def main():
         summary_text.append("=> NO se evidencian diferencias estadísticamente significativas entre los clasificadores (no se rechaza H0).")
     summary_text.append("=================================\n")
     
-    # Comparaciones post-hoc 2 a 2 si el test global es significativo
+    # --- Comparaciones post-hoc por pares (si el test global es significativo) ---
     pairwise_matrix = None
     if p_value < alpha:
         clfs = pivot_df.columns.tolist()
         n_clfs = len(clfs)
         
+        # Matriz para almacenar p-values de comparaciones por pares
         pairwise_matrix = np.ones((n_clfs, n_clfs))
         
         pvals = []
         pairs = []
         
+        # Realizar todas las comparaciones por pares posibles
         for i in range(n_clfs):
             for j in range(i+1, n_clfs):
-                scores_i = pivot_df.iloc[:, i].values
-                scores_j = pivot_df.iloc[:, j].values
+                scores_i = pivot_df.iloc[:, i].values  # Valores de métrica para clasificador i
+                scores_j = pivot_df.iloc[:, j].values  # Valores de métrica para clasificador j
                 
-                # Test Wilcoxon (dos colas)
+                # Test de Wilcoxon para muestras pareadas (dos colas)
+                # Evalúa si las distribuciones de dos clasificadores son diferentes
                 w_stat, p_val_pair = wilcoxon(scores_i, scores_j, alternative='two-sided')
                 pvals.append(p_val_pair)
                 pairs.append((i, j))
 
-        # Corrección de comparaciones múltiples
+        # Corrección de Holm para comparaciones múltiples
         reject_array, pvals_corrected, _, _ = multipletests(pvals, alpha=alpha, method='holm')
         
+        # Llenar la matriz de p-values corregidos
         for (i, j), p_corr, reject_bool in zip(pairs, pvals_corrected, reject_array):
             pairwise_matrix[i, j] = p_corr
             pairwise_matrix[j, i] = p_corr
         
+        # Añadir resultados de comparaciones por pares al resumen
         summary_text.append("Resultados comparaciones 2 a 2 (Wilcoxon + corrección múltiple):")
         all_pairs_summary = []
         significant_pairs_summary = []
         for (i, j), p_corr, reject_bool in zip(pairs, pvals_corrected, reject_array):
             c1, c2 = clfs[i], clfs[j]
             result_str = f"    {c1} vs {c2}: p-value corregido={p_corr:.4e}"
-            if reject_bool:
+
+            if reject_bool: # Si rechazamos la hipótesis nula (hay diferencia significativa)
                 result_str += " => DIFERENCIA SIGNIFICATIVA"
                 significant_pairs_summary.append(result_str)
             else:
                 result_str += " => sin diferencia significativa"
             all_pairs_summary.append(result_str)
         
+        # Añadir todas las comparaciones y luego destacar las significativas
         for line in all_pairs_summary:
             summary_text.append(line)
+
         summary_text.append("\nComparaciones con diferencia significativa:")
         if significant_pairs_summary:
             for line in significant_pairs_summary:
@@ -120,9 +155,10 @@ def main():
         else:
             summary_text.append("    No se encontraron diferencias significativas en comparaciones 2 a 2.")
     else:
+        # Si el test global no es significativo, no hay necesidad de hacer comparaciones por pares
         summary_text.append("No se realizan comparaciones 2 a 2 porque el test global no es significativo.")
     
-    # Guardar el resumen en un archivo de texto
+    # --- Guardar el resumen en un archivo de texto ---
     os.makedirs(args.outdir, exist_ok=True)
     txt_path = os.path.join(args.outdir, "model_differences_summary.txt")
     with open(txt_path, "w", encoding="utf-8") as f:
@@ -131,7 +167,7 @@ def main():
     
     print(f"  --> Resumen estadístico guardado en: {txt_path}")
 
-    # 10) Gráfico 1: Boxplot de la métrica por clasificador (ordenado por AUC mediano descendente)
+    # --- Gráfico 1: Boxplot de la métrica por clasificador ---
     boxprops = dict(color='black')                        
     medianprops = dict(color='black')                     
     whiskerprops = dict(color='black')                    
@@ -155,10 +191,12 @@ def main():
     plt.close()
     print(f"  --> Boxplot guardado en: {boxplot_path}")
 
-    # 11) Gráfico 2: Heatmap de p-values post-hoc (si se hicieron comparaciones)
+    # --- Gráfico 2: Heatmap de p-values post-hoc ---
     if pairwise_matrix is not None:
         fig, ax = plt.subplots(figsize=(6, 5))
         ax.grid(False)
+        
+        # Crear mapa de calor con los p-values corregidos
         cax = ax.imshow(pairwise_matrix, interpolation='nearest', cmap='cividis', aspect='auto')
     
         ax.set_title("Matriz de p-values corregidos (Wilcoxon)")

@@ -1,3 +1,12 @@
+#!/usr/bin/env python
+"""
+Script para evaluación de clasificadores de cáncer de próstata clínicamente significativo.
+
+Este script entrena y evalúa múltiples modelos de clasificación (SVM, Regresión Logística, 
+Random Forest, Naive Bayes, KNN, Gradient Boosting) utilizando validación cruzada 
+estratificada por paciente y genera métricas de rendimiento.
+"""
+
 import argparse
 import pandas as pd
 import numpy as np
@@ -34,49 +43,65 @@ dpi = 300
 
 def get_models(random_state=42):
     """
-    Define los pipelines para cada clasificador (SIN GridSearch).
+    Define los pipelines para cada clasificador, incluyendo preprocesamiento estándar.
+    
+    Args:
+        random_state (int): Semilla para reproducibilidad
+    
+    Returns:
+        list: Lista de tuplas (nombre_modelo, pipeline_scikit)
     """
+
+    # Pipeline para Support Vector Machine
     pipe_svc = make_pipeline(
-        StandardScaler(),
-        VarianceThreshold(),
+        StandardScaler(), # Normalización de características
+        VarianceThreshold(),  # Eliminación de características con varianza nula
         SVC(random_state=random_state, class_weight="balanced", probability=True)
     )
     
+    # Pipeline para Regresión Logística
     pipe_lr = make_pipeline(
         StandardScaler(),
         VarianceThreshold(),
         LogisticRegression(
-            penalty='elasticnet', l1_ratio=0.5,
+            penalty='elasticnet',       # Regularización combinada L1 y L2
+            l1_ratio=0.5,               # Ratio para elasticnet (0.5 = igual peso L1 y L2)
             class_weight="balanced",
             random_state=random_state,
-            solver='saga', max_iter=10000
+            solver='saga',              # Optimizador para elasticnet
+            max_iter=10000              # Iteraciones máximas
         )
     )
     
+    # Pipeline para Random Forest
     pipe_rf = make_pipeline(
         StandardScaler(),
         VarianceThreshold(),
         RandomForestClassifier(n_jobs=-1, class_weight="balanced_subsample", random_state=random_state)
     )
     
+    # Pipeline para Naive Bayes Gaussiano
     pipe_nb = make_pipeline(
         StandardScaler(),
         VarianceThreshold(),
-        GaussianNB()
+        GaussianNB() # No necesita parámetros adicionales
     )
     
+    # Pipeline para K-Nearest Neighbors
     pipe_knn = make_pipeline(
         StandardScaler(),
         VarianceThreshold(),
         KNeighborsClassifier(n_jobs=-1)
     )
     
+    # Pipeline para Gradient Boosting
     pipe_gb = make_pipeline(
         StandardScaler(),
         VarianceThreshold(),
         GradientBoostingClassifier(random_state=random_state)
     )
-    
+
+    # Lista con todos los modelos
     models = [
         ("SVM", pipe_svc),
         ("Logistic Regression", pipe_lr),
@@ -89,25 +114,33 @@ def get_models(random_state=42):
 
 def evaluate_model(model, X, y, groups, n_splits=5, n_repeats=1, base_random_state=42):
     """
-    Realiza validación cruzada repetida usando StratifiedGroupKFold en cada repetición.
+    Realiza validación cruzada repetida estratificada por grupos (pacientes).
     
-    n_splits : int -> número de folds en cada repetición
-    n_repeats: int -> cuántas veces repetamos la división en folds
-    base_random_state: semilla base, se suma con el número de repetición.
+    Args:
+        model: Modelo a evaluar (pipeline de scikit-learn)
+        X (pd.DataFrame): Características
+        y (np.array): Etiquetas binarias (0/1)
+        groups (np.array): Identificadores de grupos (pacientes) para CV
+        n_splits (int): Número de particiones por repetición
+        n_repeats (int): Número de repeticiones de la validación cruzada
+        base_random_state (int): Semilla base para reproducibilidad
     
-    Devuelve:
-    - fold_results: lista de métricas (dict) por fold global
-    - pred_vals: dict con información (y_val, y_pred, y_val_prob, etc.) para cada fold global
+    Returns:
+        tuple: (fold_results, pred_vals)
+            - fold_results: Lista de diccionarios con métricas por fold
+            - pred_vals: Dict con datos de predicciones para cada fold
     """
-    fold_results = []
-    folds_data = []  
+
+    fold_results = []   # Lista para almacenar métricas de cada fold
+    folds_data = []     # Lista para almacenar datos de predicciones
 
     global_fold_index = 0
     for rep in range(n_repeats):
-        # Cambiamos la semilla en cada repetición
-        # para obtener divisiones distintas
+        # Cada repetición usa una semilla diferente para obtener distintas particiones
         current_random_state = base_random_state + rep
         
+        # StratifiedGroupKFold garantiza distribución similar de clases
+        # manteniendo separación de grupos (pacientes) entre train/val
         splitter = StratifiedGroupKFold(
             n_splits=n_splits, shuffle=True, random_state=current_random_state
         )
@@ -115,13 +148,17 @@ def evaluate_model(model, X, y, groups, n_splits=5, n_repeats=1, base_random_sta
         for train_idx, val_idx in splitter.split(X, y, groups=groups):
             global_fold_index += 1
             
+            # Dividir datos en entrenamiento y validación
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y[train_idx], y[val_idx]
             
+            # Entrenar modelo
             model.fit(X_train, y_train)
             
-            # Métricas en entrenamiento
+            # --- Métricas en conjunto de entrenamiento ---
             y_train_pred = model.predict(X_train)
+
+            # Obtener probabilidades o scores de decisión si están disponibles
             if hasattr(model, "predict_proba"):
                 y_train_prob = model.predict_proba(X_train)[:, 1]
             elif hasattr(model, "decision_function"):
@@ -129,15 +166,18 @@ def evaluate_model(model, X, y, groups, n_splits=5, n_repeats=1, base_random_sta
             else:
                 y_train_prob = None
             
+            # Calcular AUC y F1 en entrenamiento
             try:
                 train_auc = roc_auc_score(y_train, y_train_prob) if y_train_prob is not None else np.nan
             except:
                 train_auc = np.nan
             train_f1 = f1_score(y_train, y_train_pred, average="binary")
             
-            # Métricas en validación
+
+            # --- Métricas en conjunto de validación ---
             y_val_pred = model.predict(X_val)
             
+            # Obtener probabilidades para validación
             if hasattr(model, "predict_proba"):
                 y_val_prob = model.predict_proba(X_val)[:, 1]
             elif hasattr(model, "decision_function"):
@@ -145,31 +185,38 @@ def evaluate_model(model, X, y, groups, n_splits=5, n_repeats=1, base_random_sta
             else:
                 y_val_prob = None
             
+            # Calcular AUC en validación
             try:
                 val_auc = roc_auc_score(y_val, y_val_prob) if y_val_prob is not None else np.nan
             except:
                 val_auc = np.nan
             
-            val_mcc = matthews_corrcoef(y_val, y_val_pred)
-            val_kappa = cohen_kappa_score(y_val, y_val_pred)
-            val_f1_binary = f1_score(y_val, y_val_pred, average="binary")
-            val_f1_macro = f1_score(y_val, y_val_pred, average="macro")
-            val_accuracy = accuracy_score(y_val, y_val_pred)
-            val_balanced_accuracy = balanced_accuracy_score(y_val, y_val_pred)
-            val_sensitivity = recall_score(y_val, y_val_pred, pos_label=1)
-            val_specificity = recall_score(y_val, y_val_pred, pos_label=0)
-            val_ppv = precision_score(y_val, y_val_pred, pos_label=1)
+            # Métricas de rendimiento completas en validación
+            val_mcc = matthews_corrcoef(y_val, y_val_pred)          # Coeficiente de correlación Matthews
+            val_kappa = cohen_kappa_score(y_val, y_val_pred)        # Kappa de Cohen (vs azar)
+            val_f1_binary = f1_score(y_val, y_val_pred, average="binary")  # F1 binario
+            val_f1_macro = f1_score(y_val, y_val_pred, average="macro")    # F1 macro
+            val_accuracy = accuracy_score(y_val, y_val_pred)               # Accuracy
+            val_balanced_accuracy = balanced_accuracy_score(y_val, y_val_pred)  # Accuracy balanceada
+            val_sensitivity = recall_score(y_val, y_val_pred, pos_label=1)      # Sensibilidad
+            val_specificity = recall_score(y_val, y_val_pred, pos_label=0)      # Especificidad
+            val_ppv = precision_score(y_val, y_val_pred, pos_label=1)           # Valor predictivo positivo1)
             
+            # Matriz de confusión para cálculos adicionales
             cm = confusion_matrix(y_val, y_val_pred)
+
+            # Cálculo del valor predictivo negativo (NPV)
             if (cm[0, 0] + cm[1, 0]) > 0:
                 val_npv = cm[0, 0] / (cm[0, 0] + cm[1, 0])
             else:
                 val_npv = np.nan
             
+            # Métricas por clase
             per_class_precision = precision_score(y_val, y_val_pred, average=None)
             per_class_recall = recall_score(y_val, y_val_pred, average=None)
             per_class_f1 = f1_score(y_val, y_val_pred, average=None)
             
+            # Exactitud por clase (diagonal de la matriz normalizada por filas)
             per_class_accuracy = []
             for i in range(len(cm)):
                 row_sum = np.sum(cm[i, :])
@@ -178,6 +225,7 @@ def evaluate_model(model, X, y, groups, n_splits=5, n_repeats=1, base_random_sta
                 else:
                     per_class_accuracy.append(np.nan)
             
+             # Recopilar todas las métricas en un diccionario
             fold_metrics = {
                 "Fold": global_fold_index,  
                 "Repeat": rep + 1,          
@@ -202,7 +250,7 @@ def evaluate_model(model, X, y, groups, n_splits=5, n_repeats=1, base_random_sta
             
             fold_results.append(fold_metrics)
     
-            # Guardar la info de este fold para la curva ROC
+            # Guardar datos de este fold para análisis posteriores (curvas ROC, etc.)
             folds_data.append({
                 "fold_index": global_fold_index,
                 "Repeat": rep + 1,
@@ -217,6 +265,16 @@ def evaluate_model(model, X, y, groups, n_splits=5, n_repeats=1, base_random_sta
     return fold_results, pred_vals
 
 def main():
+    """
+    Función principal que coordina el proceso completo de entrenamiento y evaluación:
+    1. Procesa argumentos de línea de comandos
+    2. Carga y preprocesa los datos
+    3. Realiza selección de características (opcional)
+    4. Entrena y evalúa modelos
+    5. Genera curvas ROC y resultados
+    6. Ejecuta scripts complementarios (opcional)
+    """
+    # --- Configuración de argumentos de línea de comandos ---    
     parser = argparse.ArgumentParser(
         description="Evaluación de modelos con validación cruzada repetida"
     )
@@ -260,72 +318,92 @@ def main():
 
     args = parser.parse_args()
 
-    # Ruta al CSV
+    # =====================================================================
+
+    # --- Carga de datos ---
+    # Ruta al CSV con características
     data_path = os.path.join(
         args.data_pre,
         "concatenated_data",
         args.csv
     )
     df = pd.read_csv(data_path)
+
+    # Crear identificador único por paciente y estudio
     df['patient_id_study_id'] = df['patient_id'].astype(str) + '_' + df['study_id'].astype(str)
     df = df.set_index('patient_id_study_id')
 
-    # Variables para CV
-    y = df['label'].values
-    groups = df['patient_id'].values
-    X = df.drop(columns=['patient_id', 'study_id', 'label'])
+    # Preparar variables para el modelo
+    y = df['label'].values                  # Variable objetivo (0/1 para csPCa)
+    groups = df['patient_id'].values        # ID de paciente para CV estratificada por paciente
+    X = df.drop(columns=['patient_id', 'study_id', 'label']) # Características
 
+    # Codificar etiquetas a valores enteros (por si acaso)
     le = LabelEncoder()
     y = le.fit_transform(y)
 
-    # Estructura de carpetas de resultados
+    # --- Configuración de directorios de resultados ---
     base_dir = args.results_base
     strat_dir = os.path.join(base_dir, args.feature_strategy)
     os.makedirs(strat_dir, exist_ok=True)
 
+    # Determinar el modo (gland/full) a partir del nombre del CSV
     csv_stem = os.path.splitext(args.csv)[0]
-    mode = csv_stem.rsplit("_", 1)[-1]
+    mode = csv_stem.rsplit("_", 1)[-1] # Extrae 'gland' o 'full' del nombre
+
+    # Crear directorio específico para este experimento
     experiment_dir = os.path.join(strat_dir, mode)
     os.makedirs(experiment_dir, exist_ok=True)
 
     print(f"Creada carpeta de resultados: {experiment_dir}")
+
     # =====================================================================
     
+    # --- Selección de características ---
+    # Por defecto, usar todas las características
     selected_features = X.columns
     
-    # === Selección de características ===
     if args.feature_strategy == "most_discriminant":
         print(">> Realizando selección de características...")
         
+        # Crear directorios para resultados de selección de características
         fs_dir = os.path.join(experiment_dir, "feature_selection")
         os.mkdir(fs_dir)
         
         images_dir = os.path.join(fs_dir, "images")
         os.mkdir(images_dir)
         
+        # Inicializar listas para almacenar estadísticas por característica
         feature_names, sensitivity_list, specificity_list = ([] for _ in range(3))
         auc_list, threshold_list, test_type_list, pvalue_list, pos_vs_neg_list = ([] for _ in range(5))
         
+        # Evaluar cada característica individualmente
         for column in X.columns:
+            # Test de normalidad Shapiro-Wilk
             stat, p = shapiro(X[column])
             
-            a_dist = X[column][y == 0]
-            b_dist = X[column][y == 1]
+            # Obtener distribuciones por clase
+            a_dist = X[column][y == 0]  # Clase negativa (no-csPCa)
+            b_dist = X[column][y == 1]  # Clase positiva (csPCa)
             
             feature_names.append(column)
             
+            # Seleccionar test estadístico según la normalidad
             alpha = 0.05
-            if p > alpha:
+            if p > alpha: # Si p > 0.05, asumimos normalidad
                 test_type_list.append('t-test')
-                _, pval = ttest_ind(a_dist, b_dist)
+                _, pval = ttest_ind(a_dist, b_dist) # T-test para datos normales
             else:
                 test_type_list.append('mann-whitney U-test')
-                _, pval = mannwhitneyu(a_dist, b_dist)
+                _, pval = mannwhitneyu(a_dist, b_dist) # Test no paramétrico
             pvalue_list.append(pval)
             
+            # Evaluar capacidad discriminativa (AUC)
             fpr, tpr, thresholds = metrics.roc_curve(y, X[column], pos_label=1)
             auc_val = metrics.auc(fpr, tpr)
-            pos_vs_neg = ">"
+
+            # Si AUC < 0.5, invertir la relación (mayor/menor)
+            pos_vs_neg = ">" 
             if auc_val < 0.5:
                 fpr, tpr, thresholds = metrics.roc_curve(y, X[column], pos_label=0)
                 auc_val = metrics.auc(fpr, tpr)
@@ -333,19 +411,22 @@ def main():
             auc_list.append(auc_val)
             pos_vs_neg_list.append(pos_vs_neg)
             
+            # Encontrar punto óptimo en la curva ROC (Youden's J index)
             roc_df = pd.DataFrame({
                 'fpr': fpr,
                 'tpr': tpr,
                 '1-fpr': 1 - fpr,
-                'tf': tpr - (1 - fpr),
+                'tf': tpr - (1 - fpr),   # Youden's J = Sensibilidad + Especificidad - 1
                 'thresholds': thresholds
             })
-            cutoff_df = roc_df.iloc[(roc_df.tf - 0).abs().argsort()[:1]]
+            cutoff_df = roc_df.iloc[(roc_df.tf - 0).abs().argsort()[:1]] # Punto más cercano a óptimo
             
+            # Guardar sensibilidad, especificidad y umbral óptimo
             sensitivity_list.append(cutoff_df['tpr'].values[0])
             specificity_list.append(cutoff_df['1-fpr'].values[0])
             threshold_list.append(cutoff_df['thresholds'].values[0])
         
+        # Crear DataFrame con todas las estadísticas por característica
         train_auc_pvals_df = pd.DataFrame(
             list(zip(auc_list, pos_vs_neg_list, threshold_list,
                      sensitivity_list, specificity_list, 
@@ -353,30 +434,36 @@ def main():
             index=feature_names,
             columns=['AUC', 'Pos.vs.Neg.', 'Cutoff-Threshold', 'Sensitivity',
                      'Specificity', 'Test', 'p-value']
-        ).sort_values(by='p-value', ascending=True)
+        ).sort_values(by='p-value', ascending=True) # Ordenar por p-valor (más significativas primero)
         
+        # Seleccionar características: máximo 1 característica por cada 15 muestras
+        # (regla general para evitar sobreajuste)
         num_features_model = round(X.shape[0] / 15)
         train_df = train_auc_pvals_df.sort_values(by='p-value', ascending=True)
         
+        # Seleccionar las N características más significativas
         selected_features = train_df.index[0:num_features_model]
         print(f"  --> Seleccionadas {len(selected_features)} características más relevantes.")
         
+        # Filtrar DataFrame para usar solo las características seleccionadas
         X = X[selected_features]
         
+        # Guardar DataFrame con estadísticas completas
         df_path_1 = os.path.join(fs_dir, "train_auc_pvals_df.csv")
         train_auc_pvals_df.to_csv(df_path_1)
         print(f"  --> Guardado CSV: {df_path_1}\n")
         
-        # ====== Generamos imágenes para las TOP 20 features ======
+        # --- Generar visualizaciones para las TOP 20 características ---
         top_20 = train_auc_pvals_df.index[:20]
         
         for rank, feature_name in enumerate(top_20, start=1):
+            # Crear nombre de archivo
             safe_feat_name = feature_name.replace("/", "_")
             feat_folder_name = f"{rank}_{safe_feat_name}"
             feat_folder_path = os.path.join(images_dir, feat_folder_name)
             os.mkdir(feat_folder_path)
             
-            # Violinplot
+            # 1. Gráfico de violín para visualizar distribuciones por clase
             plt.figure(figsize=(9, 9))
             sns.violinplot(x=y, y=df[feature_name], color='grey')
             plt.title(f"Distribución de {feature_name} en no-csPCa vs csPCa", fontsize=14)
@@ -386,7 +473,7 @@ def main():
             plt.savefig(violin_plot_path, dpi=dpi)
             plt.close()
             
-            # ROC curve
+            # 2. Curva ROC para esta característica individual
             fpr, tpr, _ = metrics.roc_curve(y, df[feature_name], pos_label=1)
             auc_val = metrics.auc(fpr, tpr)
             
@@ -402,13 +489,17 @@ def main():
     else:
         print(">> Usando TODAS las características (sin selección).")
     
-    # == Definimos y evaluamos los modelos ==
+    # =====================================================================
+
+    # --- Entrenamiento y evaluación de modelos ---
     models = get_models(random_state=42)
     
+    # Colectores para resultados
     all_results = []
     preds_data = []
     
-    # Aquí llamamos a evaluate_model con n_repeats
+
+    # Evaluar cada modelo
     for model_name, model in models:
         print(f"Evaluando {model_name}...")
         fold_metrics_list, pred_vals = evaluate_model(
@@ -417,31 +508,38 @@ def main():
             n_repeats=args.n_repeats,
             base_random_state=42
         )
-        
+
+        # Añadir nombre de clasificador a cada resultado
         for fold_metrics in fold_metrics_list:
             fold_metrics["Classifier"] = model_name
             all_results.append(fold_metrics)
         
+        # Almacenar predicciones
         preds_data.append({
             "Classifier": model_name,
             "folds": pred_vals["folds"]
         })
-    
+
+    # Crear DataFrame con todos los resultados
     df_resultados = pd.DataFrame(all_results)
 
+    # Ordenar columnas para mejor legibilidad
     fixed_cols = ["Classifier", "Fold", "Repeat"]
     other_cols = [c for c in df_resultados.columns if c not in fixed_cols]
     df_resultados = df_resultados[fixed_cols + other_cols]
     df_resultados.sort_values(by=["Classifier", "Fold"], inplace=True)
     
+    # Generar nombre de archivo para resultados
     csv_basename = os.path.splitext(args.csv)[0]
     feat_str = args.feature_strategy
     resultados_filename = f"resultados_{csv_basename}_{feat_str}.csv"
     
+    # Guardar resultados
     resultados_filepath = os.path.join(experiment_dir, resultados_filename)
     df_resultados.to_csv(resultados_filepath, index=False)
     print(f"\nResultados guardados en '{resultados_filepath}'")
     
+    # --- Estructurar datos de predicciones para guardar ---
     records_for_csv = []
     for item in preds_data:
         clf_name = item["Classifier"]
@@ -466,13 +564,14 @@ def main():
                 "y_prob": y_prob_list
             })
 
+    # Guardar predicciones en CSV
     df_preds = pd.DataFrame(records_for_csv)
     preds_filename = f"preds_{csv_basename}_{feat_str}.csv"
     preds_filepath = os.path.join(experiment_dir, preds_filename)
     df_preds.to_csv(preds_filepath, index=False)
     print(f"Predicciones guardadas en '{preds_filepath}'")
     
-    # === Guardar txt con las variables usadas ===
+    # --- Guardar lista de variables utilizadas ---
     variables_txt_path = os.path.join(experiment_dir, "variables_usadas.txt")
     with open(variables_txt_path, "w") as f:
         for feat in selected_features:
@@ -480,29 +579,31 @@ def main():
     print(f"Archivo con variables usadas: {variables_txt_path}")
 
 
-    # <--- Curvas ROC: Generamos dos archivos, uno para el fold óptimo y otro para el fold mediano por clasificador
+    # --- Generación de curvas ROC ---
     print("\nGenerando curvas ROC: fold óptimo y mediano por clasificador...")
     
     roc_dir = os.path.join(experiment_dir, "ROC_curves")
     os.makedirs(roc_dir, exist_ok=True)
     
-    curves_info_optimal = []
-    curves_info_median = []
+    # Colectores para información de curvas ROC
+    curves_info_optimal = []  # Para el fold con mejor AUC de cada modelo
+    curves_info_median = []   # Para el fold con AUC mediano de cada modelo
     
+    # Procesar cada clasificador
     classifiers = df_resultados["Classifier"].unique()
     for clf_name in classifiers:
         df_clf = df_resultados[df_resultados["Classifier"] == clf_name]
         
-        # Fold óptimo
+        # --- Identificar fold óptimo (mejor AUC) ---
         best_fold_idx = df_clf["val_auc"].idxmax()
         best_fold_num = df_clf.loc[best_fold_idx, "Fold"]
         
-        # Fold mediano
+        # --- Identificar fold mediano (AUC más cercano a la mediana) ---
         median_auc = df_clf["val_auc"].median()
         median_fold_idx = (df_clf["val_auc"] - median_auc).abs().idxmin()
         median_fold_num = df_clf.loc[median_fold_idx, "Fold"]
         
-        # Predicciones óptimas
+        # --- Procesar datos para fold óptimo ---
         df_clf_preds_best = df_preds[
             (df_preds["Classifier"] == clf_name) & 
             (df_preds["Fold"] == best_fold_num)
@@ -521,7 +622,7 @@ def main():
                     "auc": auc_val_best
                 })
         
-        # Predicciones medianas
+        # --- Procesar datos para fold mediano ---
         df_clf_preds_median = df_preds[
             (df_preds["Classifier"] == clf_name) & 
             (df_preds["Fold"] == median_fold_num)
@@ -540,10 +641,11 @@ def main():
                     "auc": auc_val_median
                 })
     
-    # Ordenamos las curvas de cada tipo por AUC descendente
+    # Ordenar las curvas de cada tipo por AUC descendente (mejor rendimiento primero)
     curves_info_optimal.sort(key=lambda x: x["auc"], reverse=True)
     curves_info_median.sort(key=lambda x: x["auc"], reverse=True)
     
+    # Definir paleta de colores para consistencia visual entre gráficos
     my_colors = [
         "#0072B2",  # Azul oscuro
         "#009E73",  # Verde
@@ -555,11 +657,12 @@ def main():
     
     my_palette = sns.color_palette(my_colors)
     
+    # Asignar un color específico a cada clasificador
     fixed_classifiers = ["SVM", "Logistic Regression", "Random Forest", 
                          "Naive Bayes", "KNN", "Gradient Boosting"]
     color_mapping = {clf: my_palette[i] for i, clf in enumerate(fixed_classifiers)}
     
-    # --- ROC óptimo ---
+    # --- Generar gráfico ROC para los folds óptimos ---
     fig_opt, ax_opt = plt.subplots(figsize=(8, 6))
     for info in curves_info_optimal:
         clf_name = info["classifier"]
@@ -570,23 +673,27 @@ def main():
         ax_opt.plot(fpr, tpr, label=f"{clf_name} (Fold={fold_num}, AUC={auc_val:.3f})", 
                     color=color_mapping[clf_name])
     
+    # Añadir línea diagonal de referencia (clasificación aleatoria)
     ax_opt.plot([0, 1], [0, 1], linestyle='--', color='gray', label="_nolegend_")
     ax_opt.set_xlabel("False Positive Rate", fontsize=12, labelpad=10)
     ax_opt.set_ylabel("True Positive Rate", fontsize=12, labelpad=10)
     ax_opt.set_title("Curvas ROC: Folds óptimos por modelo", fontsize=14)
     ax_opt.tick_params(axis='both', which='major', labelsize=10)
     ax_opt.legend(fontsize=10)
+
+    # Mejorar apariencia de la leyenda
     leg = ax_opt.get_legend()
     for line in leg.get_lines():
         line.set_linewidth(2.5)
     fig_opt.tight_layout()
     
+    # Guardar gráfico
     roc_plot_path_opt = os.path.join(roc_dir, "roc_optimal_folds.png")
     plt.savefig(roc_plot_path_opt, dpi=dpi, bbox_inches='tight')
     plt.close(fig_opt)
     print(f"Gráfico ROC (fold óptimo) guardado en: {roc_plot_path_opt}")
     
-    # --- ROC mediano ---
+    # --- Generar gráfico ROC para los folds medianos ---
     fig_med, ax_med = plt.subplots(figsize=(8, 6))
     for info in curves_info_median:
         clf_name = info["classifier"]
@@ -596,25 +703,32 @@ def main():
         auc_val = info["auc"]
         ax_med.plot(fpr, tpr, label=f"{clf_name} (Fold={fold_num}, AUC={auc_val:.3f})", 
                     color=color_mapping[clf_name])
-    
+        
+    # Añadir línea diagonal de referencia
     ax_med.plot([0, 1], [0, 1], linestyle='--', color='gray', label="_nolegend_")
     ax_med.set_xlabel("False Positive Rate", fontsize=12, labelpad=10)
     ax_med.set_ylabel("True Positive Rate", fontsize=12, labelpad=10)
     ax_med.set_title("Curvas ROC: Folds medianos por modelo", fontsize=14)
     ax_med.tick_params(axis='both', which='major', labelsize=10)
     ax_med.legend(fontsize=10)
+
+    # Mejorar apariencia de la leyenda
     leg = ax_med.get_legend()
     for line in leg.get_lines():
         line.set_linewidth(2.5)
     fig_med.tight_layout()
     
+    # Guardar gráfico
     roc_plot_path_med = os.path.join(roc_dir, "roc_median_folds.png")
     plt.savefig(roc_plot_path_med, dpi=dpi, bbox_inches='tight')
     plt.close(fig_med)
     print(f"Gráfico ROC (fold mediano) guardado en: {roc_plot_path_med}")
 
-    
-    # <--- Si se habilita calculate_differences, ejecutar model_differences
+    # =====================================================================
+
+    # --- Ejecución de análisis adicionales (scripts complementarios) ---
+
+    # Ejecutar script de comparación estadística de modelos (opcional)
     if args.calculate_differences:
         print("\nEjecutando comparaciones de modelos (model_differences.py)...")
         import subprocess
@@ -622,25 +736,30 @@ def main():
         model_diff_dir = os.path.join(experiment_dir, "model_differences")
         os.mkdir(model_diff_dir)
 
+        # Construir comando para el script de comparación
         postprocess_cmd = [
             "python3",
             "2_model_differences.py",
-            "--csv_preds", preds_filepath,
-            "--csv_results", resultados_filepath,
-            "--metric", "val_auc",
-            "--alpha", "0.05",
-            "--outdir", model_diff_dir
+            "--csv_preds", preds_filepath,  # Archivo con predicciones
+            "--csv_results", resultados_filepath,  # Archivo con métricas
+            "--metric", "val_auc",  # Métrica a comparar (AUC)
+            "--alpha", "0.05",  # Nivel de significancia
+            "--outdir", model_diff_dir  # Directorio de salida
         ]
-        
+
+        # Ejecutar script como proceso separado
         subprocess.call(postprocess_cmd)
     else:
         print("\nOmitiendo cálculo de diferencias (model_differences.py)...")
 
-    # <--- Si se habilita fine_tune_best_model, ejecutar retrain_best_model_and_evaluate
+    
+    # Fine-tuning del mejor modelo (opcional)
     if args.fine_tune_best_model:
         if len(curves_info_optimal) > 0:
+            # Identificar el mejor modelo (el primero en la lista ordenada)
             best_model = curves_info_optimal[0]["classifier"]
 
+            # Mapeo de nombres para script de fine-tuning
             model_mapping = {
                 "SVM": "SVM",
                 "Logistic Regression": "LogisticRegression",
@@ -653,12 +772,13 @@ def main():
             
             print(f"Fine-tuning del mejor modelo: {best_model_finetune}")
             
+            # Construir comando para script de fine-tuning
             fine_tune_cmd = [
                 "python3",
                 "3_retrain_best_model_and_evaluate.py",
-                "--csv", args.csv,                       
-                "--model", best_model_finetune,           
-                "--variables", variables_txt_path          
+                "--csv", args.csv,                  # Mismo CSV de características
+                "--model", best_model_finetune,     # Mejor modelo identificado
+                "--variables", variables_txt_path   # Variables seleccionadas
             ]
             
             subprocess.call(fine_tune_cmd)

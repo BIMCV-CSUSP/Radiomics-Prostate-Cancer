@@ -1,3 +1,13 @@
+#!/usr/bin/env python
+"""
+Script para análisis estadístico de modelos de clasificación.
+
+Este script analiza resultados de múltiples modelos de aprendizaje automático,
+realizando comparaciones estadísticas (test de Friedman y Wilcoxon con corrección),
+calculando tamaños de efecto (Cohen's d) y generando diversas visualizaciones
+para facilitar la interpretación de resultados.
+"""
+
 import os
 import pandas as pd
 import numpy as np
@@ -22,11 +32,30 @@ plt.style.use(['science', 'grid'])
 dpi = 300
 
 def extract_model_name(path):
-    """Extrae el nombre del modelo de la ruta"""
+    """
+    Extrae el nombre del modelo de la ruta de un directorio.
+    
+    Args:
+        path (str): Ruta al directorio del modelo
+        
+    Returns:
+        str: Nombre del modelo extraído
+    """
     return os.path.basename(path)
 
 def read_results_folder(folder_path):
-    """Lee todos los CSVs en una carpeta de resultados"""
+    """
+    Lee todos los CSVs de resultados en una carpeta y los combina en un DataFrame.
+    
+    Busca archivos CSV con "split" en el nombre, extrae el número de split
+    del nombre del archivo, y añade el nombre del modelo como columna.
+    
+    Args:
+        folder_path (str): Ruta a la carpeta de resultados
+        
+    Returns:
+        pd.DataFrame: DataFrame con todos los resultados combinados o DataFrame vacío si no hay resultados
+    """
     all_data = []
     
     # Verifica si la carpeta existe
@@ -34,7 +63,7 @@ def read_results_folder(folder_path):
         print(f"La carpeta {folder_path} no existe")
         return pd.DataFrame()
     
-    # Busca todos los archivos CSV en la carpeta
+    # Busca todos los archivos CSV en la carpeta que contengan "split" en el nombre
     csv_files = [f for f in os.listdir(folder_path) if f.endswith('.csv') and 'split' in f]
     
     if not csv_files:
@@ -68,14 +97,25 @@ def read_results_folder(folder_path):
     # Concatena todos los DataFrames
     combined_df = pd.concat(all_data, ignore_index=True)
     
-    # Añade el nombre del modelo como columna AQUÍ, DESPUÉS de concatenar
+    # Añade el nombre del modelo como columna
     model_name = extract_model_name(folder_path)
     combined_df['model'] = model_name
     
     return combined_df
 
 def find_results_folders(root_path):
-    """Encuentra todas las carpetas de resultados"""
+    """
+    Busca todas las carpetas de resultados que contengan archivos CSV.
+    
+    Recorre recursivamente el directorio raíz buscando carpetas que
+    contengan archivos CSV de resultados (con "split" en el nombre).
+    
+    Args:
+        root_path (str): Directorio raíz para la búsqueda
+        
+    Returns:
+        list: Lista de rutas a las carpetas de resultados encontradas
+    """
     results_folders = []
     
     for root, dirs, files in os.walk(root_path):
@@ -86,7 +126,20 @@ def find_results_folders(root_path):
     return results_folders
 
 def process_string_lists(df):
-    """Procesa columnas que contienen listas como strings"""
+    """
+    Procesa columnas que contienen listas almacenadas como strings.
+    
+    Convierte las listas almacenadas como strings de Python en listas reales,
+    y crea columnas separadas para cada elemento de la lista (para cada clase).
+    
+    Args:
+        df (pd.DataFrame): DataFrame con columnas que contienen listas como strings
+        
+    Returns:
+        pd.DataFrame: DataFrame procesado con nuevas columnas para cada clase
+    """
+    
+    # Columnas que contienen listas como strings
     list_columns = ['per_class_precision', 'per_class_recall', 'per_class_f1', 'per_class_accuracy']
     
     for col in list_columns:
@@ -100,42 +153,22 @@ def process_string_lists(df):
     
     return df
 
-def plot_metric_comparison(df, metric, title=None, figsize=(12, 8), output_dir='plots'):
-    """Genera un gráfico comparativo de una métrica para diferentes modelos"""
-    plt.figure(figsize=figsize)
-    
-    # Asegúrate de que el DataFrame contiene los datos necesarios
-    if metric not in df.columns or 'model' not in df.columns or 'epoch' not in df.columns:
-        print(f"Faltan columnas necesarias para el gráfico. Se requiere: 'model', 'epoch', y '{metric}'")
-        return
-    
-    # Agrupa por modelo y época, y calcula el promedio de la métrica para todos los splits
-    metric_avg = df.groupby(['model', 'epoch'])[metric].mean().reset_index()
-    
-    # Crea un gráfico de líneas
-    sns.lineplot(data=metric_avg, x='epoch', y=metric, hue='model', marker='o')
-    
-    if title:
-        plt.title(title)
-    else:
-        plt.title(f'Comparación de {metric} entre modelos')
-        
-    plt.xlabel('Época')
-    plt.ylabel(metric)
-    plt.grid(True)
-    plt.tight_layout()
-    
-    # Asegúrate de que el directorio de salida existe
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Guarda la figura
-    plt.savefig(os.path.join(output_dir, f'{metric}_comparison.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    return
-
 def plot_radar_chart(df, metrics, figsize=(10, 8), output_dir='plots'):
-    """Genera un gráfico de radar para comparar modelos según múltiples métricas"""
+    """
+    Genera un gráfico de radar para comparar modelos según múltiples métricas.
+    
+    Permite una visualización compacta de múltiples métricas simultáneamente,
+    facilitando la comparación global entre modelos.
+    
+    Args:
+        df (pd.DataFrame): DataFrame con estadísticas agregadas por modelo
+        metrics (list): Lista de métricas a incluir en el gráfico
+        figsize (tuple, optional): Tamaño de la figura
+        output_dir (str, optional): Directorio para guardar el gráfico
+        
+    Returns:
+        None: Guarda el gráfico como archivo PNG
+    """
     # Preparación de datos: filtra para obtener solo la media de cada métrica
     radar_data = pd.DataFrame()
     
@@ -147,14 +180,14 @@ def plot_radar_chart(df, metrics, figsize=(10, 8), output_dir='plots'):
     models = radar_data.index
     num_metrics = len(metrics)
     angles = np.linspace(0, 2*np.pi, num_metrics, endpoint=False).tolist()
-    angles += angles[:1]  # Cierra el círculo
+    angles += angles[:1]  
     
     fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(polar=True))
     
     # Añade cada modelo al gráfico de radar
     for i, model in enumerate(models):
         values = radar_data.loc[model].values.flatten().tolist()
-        values += values[:1]  # Cierra el círculo
+        values += values[:1]  
         ax.plot(angles, values, linewidth=2, label=model)
         ax.fill(angles, values, alpha=0.1)
     
@@ -166,7 +199,7 @@ def plot_radar_chart(df, metrics, figsize=(10, 8), output_dir='plots'):
     
     plt.tight_layout()
     
-    # Asegúrate de que el directorio de salida existe
+    # Asegura que el directorio de salida existe
     os.makedirs(output_dir, exist_ok=True)
     
     # Guarda la figura
@@ -176,9 +209,22 @@ def plot_radar_chart(df, metrics, figsize=(10, 8), output_dir='plots'):
     return
 
 def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output_dir='stats'):
-    """Realiza análisis estadístico completo: Friedman + comparaciones post-hoc (Wilcoxon)
-       con corrección múltiple y cálculo del tamaño del efecto (Cohen's d) para cada comparación,
-       mostrando las diferencias significativas tanto por p-values corregidos como por Cohen's d."""
+    """
+    Realiza análisis estadístico completo para comparar modelos.
+    
+    Ejecuta test de Friedman para detectar diferencias globales entre modelos,
+    seguido de comparaciones post-hoc con Wilcoxon y corrección múltiple.
+    Calcula tamaños de efecto (Cohen's d) y genera visualizaciones.
+    
+    Args:
+        best_results_df (pd.DataFrame): DataFrame con los mejores resultados por modelo y split
+        metric_col (str): Nombre de la métrica a analizar
+        alpha (float, optional): Nivel de significancia para los tests
+        output_dir (str, optional): Directorio para guardar resultados
+        
+    Returns:
+        list: Líneas de texto con el resumen del análisis estadístico
+    """
     
     # Prepara el DataFrame en formato adecuado para el test de Friedman
     pivot_df = best_results_df.pivot_table(
@@ -187,6 +233,7 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
         values=metric_col
     )
 
+    # Manejo de valores NaN
     if pivot_df.isnull().any().any():
         print("Advertencia: existen valores NaN en la tabla. Se eliminan filas con NaN.")
         pivot_df.dropna(axis=0, inplace=True)
@@ -209,18 +256,20 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
     summary_text.append(f"Estadístico: {stat:.4f}, p-value: {p_value:.4e}")
     summary_text.append(f"alpha = {alpha}")
     
+    # Interpretación del resultado del test de Friedman
     if p_value < alpha:
         summary_text.append("=> HAY diferencias estadísticamente significativas entre los modelos (rechazamos H0).")
     else:
         summary_text.append("=> NO se evidencian diferencias estadísticamente significativas entre los modelos (no se rechaza H0).")
     summary_text.append("=================================\n")
     
-    # Comparaciones post-hoc 2 a 2 con Wilcoxon y corrección múltiple, junto con cálculo de Cohen's d
+    # Variables para almacenar resultados
     pairwise_matrix = None
     effect_size_matrix = None
     pvalue_significant_pairs = []
     cohen_significant_pairs = []
     
+    # Comparaciones post-hoc si el test global es significativo
     if p_value < alpha:
         models = pivot_df.columns.tolist()
         n_models = len(models)
@@ -239,7 +288,7 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
                 try:
                     stat_w, p_val = wilcoxon(scores_i, scores_j, alternative='two-sided')
                 except Exception as e:
-                    p_val = np.nan  # En caso de error
+                    p_val = np.nan  
                 pvals.append(p_val)
                 pairs.append((i, j))
                 
@@ -257,26 +306,33 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
         pairwise_matrix = np.ones((n_models, n_models))
         effect_size_matrix = np.zeros((n_models, n_models))
         
-        # Define un umbral para considerar un efecto como relevante (por ejemplo, 0.5 para efecto medio)
+        # Define un umbral para considerar un efecto como relevante (Cohen's d >= 0.5 es efecto medio)
         cohen_threshold = 0.5
         
+        # Procesa resultados de las comparaciones pareadas
         idx = 0
         for (i, j) in pairs:
             p_corr = pvals_corrected[idx]
             cohen_d = cohen_values[idx]
+
+            # Almacena valores en las matrices
             pairwise_matrix[i, j] = p_corr
             pairwise_matrix[j, i] = p_corr
             effect_size_matrix[i, j] = cohen_d
             effect_size_matrix[j, i] = cohen_d
+
+            # Crea cadena de resultados para esta comparación
             result_str = f"    {models[i]} vs {models[j]}: p-value (Wilcoxon, corregido)={p_corr:.4e}, Cohen's d={cohen_d:.4f}"
             all_pairs_summary.append(result_str)
             
+            # Identifica comparaciones significativas por p-value o tamaño del efecto
             if p_corr < alpha:
                 pvalue_significant_pairs.append(result_str + " => DIFERENCIA SIGNIFICATIVA POR p-value")
             if abs(cohen_d) >= cohen_threshold:
                 cohen_significant_pairs.append(result_str + " => DIFERENCIA SIGNIFICATIVA POR COHEN'S d")
             idx += 1
         
+        # Añade resultados al resumen
         summary_text.append("Resultados comparaciones 2 a 2 (Wilcoxon + corrección múltiple y cálculo de Cohen's d):")
         for line in all_pairs_summary:
             summary_text.append(line)
@@ -297,7 +353,7 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
     else:
         summary_text.append("No se realizan comparaciones 2 a 2 porque el test global no es significativo.")
     
-    # Asegúrate de que el directorio de salida existe
+    # Asegura que el directorio de salida existe
     os.makedirs(output_dir, exist_ok=True)
     
     # Guarda el resumen en un archivo de texto
@@ -308,6 +364,8 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
     
     print(f"  --> Resumen estadístico guardado en: {txt_path}")
     
+    # ======= Generación de visualizaciones =======
+
     # Genera boxplot de la métrica por modelo (ordenado por mediana descendente)
     plt.figure(figsize=(10, 6))
     boxprops = dict(color='black')
@@ -316,6 +374,7 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
     capprops = dict(color='black')
     flierprops = dict(color='black')
     
+    # Crea boxplot con propiedades personalizadas
     pivot_df.boxplot(
         boxprops=boxprops,
         medianprops=medianprops,
@@ -332,6 +391,7 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
     plt.close()
     print(f"  --> Boxplot guardado en: {boxplot_path}")
     
+
     # Genera heatmap de p-values post-hoc (Wilcoxon con corrección múltiple)
     if pairwise_matrix is not None:
         fig, ax = plt.subplots(figsize=(8, 7))
@@ -363,6 +423,7 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
         plt.close()
         print(f"  --> Heatmap de p-values guardado en: {heatmap_path}")
     
+
     # Genera heatmap del tamaño del efecto (Cohen's d)
     if effect_size_matrix is not None:
         fig, ax = plt.subplots(figsize=(8, 7))
@@ -396,13 +457,34 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
     return summary_text
 
 def analyze_results(root_path, output_base='results_analysis'):
+    """
+    Función principal que coordina todo el proceso de análisis de resultados.
+    
+    Esta función:
+    1. Encuentra carpetas con resultados
+    2. Combina todos los resultados en un DataFrame
+    3. Identifica el epoch con AUC óptimo para cada modelo/split
+    4. Realiza análisis estadístico comparativo (Friedman + Wilcoxon)
+    5. Genera visualizaciones (boxplots, heatmaps, gráficos de radar, etc.)
+    
+    Args:
+        root_path (str): Ruta raíz donde buscar carpetas de resultados
+        output_base (str, optional): Directorio base para guardar el análisis
+        
+    Returns:
+        None
+    """
+
+    # Configura directorios de salida
     csv_dir = os.path.join(output_base, 'csv')
     stats_dir = os.path.join(output_base, 'statistical_analysis')
     plots_dir = os.path.join(output_base, 'general_plots')
     
+    # Crea directorios si no existen
     for dir_path in [csv_dir, stats_dir, plots_dir]:
         os.makedirs(dir_path, exist_ok=True)
     
+    # Busca carpetas con resultados
     results_folders = find_results_folders(root_path)
     
     if not results_folders:
@@ -430,14 +512,18 @@ def analyze_results(root_path, output_base='results_analysis'):
         print("No se encontraron resultados en ninguna carpeta")
         return
     
+    # Combina todos los resultados en un único DataFrame
     combined_results = pd.concat(all_results, ignore_index=True)
     combined_results = process_string_lists(combined_results)
     combined_results = pd.concat(all_results, ignore_index=True)
+
+    # Reorganiza columnas para poner 'model' primero (si existe)
     if 'model' in combined_results.columns:
         cols = combined_results.columns.tolist()
         cols.remove('model')
         combined_results = combined_results[['model'] + cols]
     
+    # Guarda resultados combinados
     combined_results.to_csv(os.path.join(csv_dir, 'all_results_combined.csv'), index=False)
     print(f"Resultados combinados guardados en: {os.path.join(csv_dir, 'all_results_combined.csv')}")
     
@@ -445,6 +531,7 @@ def analyze_results(root_path, output_base='results_analysis'):
     #      Epoch con AUC óptimo          #
     ######################################
     
+    # Para cada modelo y split, encuentra la época con mejor AUC
     optimal_results = []
     for model in combined_results['model'].unique():
         for split in combined_results[combined_results['model'] == model]['split'].unique():
@@ -460,16 +547,19 @@ def analyze_results(root_path, output_base='results_analysis'):
                 optimal_row['split'] = split
                 
                 optimal_results.append(optimal_row)
-            
-    optimal_results_df = pd.DataFrame(optimal_results)
     
+    # Crea DataFrame con los resultados óptimos
+    optimal_results_df = pd.DataFrame(optimal_results)
+
+    # Guarda resultados óptimos
     optimal_results_df.to_csv(os.path.join(csv_dir, 'optimal_auc_results.csv'), index=False)
     print(f"Resultados con AUC óptimo guardados en: {os.path.join(csv_dir, 'optimal_auc_results.csv')}")
     
     ########################################################
     #      Análisis estadístico (Friedman + Wilcoxon)      #
     ########################################################
-    
+
+    # Realiza análisis estadístico para el AUC (si está disponible)
     if 'val_auc' in optimal_results_df.columns:
         perform_statistical_analysis(
             optimal_results_df,
@@ -484,16 +574,19 @@ def analyze_results(root_path, output_base='results_analysis'):
     #      Gráficos adicionales      #
     ##################################
     
+    # Define métricas a visualizar
     plot_metrics = [
         'val_auc', 'val_f1_binary', 'val_accuracy', 
         'val_balanced_accuracy', 'val_specificity', 'val_sensitivity',
     ]
-    
+
+    # Filtra métricas disponibles
     existing_metrics = [m for m in plot_metrics if m in combined_results.columns]
     if not existing_metrics:
         print("No se encontraron métricas de validación en los datos")
         return
     
+    # Calcula estadísticas resumen por modelo
     summary_stats = optimal_results_df.groupby('model')[existing_metrics].agg(['mean', 'std', 'min', 'max', 'median'])
     summary_stats.to_csv(os.path.join(csv_dir, 'model_summary_statistics.csv'))
     print(f"Estadísticas resumen guardadas en: {os.path.join(csv_dir, 'model_summary_statistics.csv')}")
@@ -536,6 +629,16 @@ def analyze_results(root_path, output_base='results_analysis'):
     print("\nAnálisis completado exitosamente.")
 
 def main():
+    """
+    Función de punto de entrada para el script cuando se ejecuta directamente.
+    
+    Procesa argumentos de línea de comandos y ejecuta el análisis de resultados.
+    
+    Argumentos de línea de comandos:
+        --mode: Tipo de resultados a analizar ('gland' o 'full')
+        --data_root: Directorio raíz donde se ubican las carpetas de resultados
+        --output_base: Prefijo para el directorio de salida del análisis
+    """
     parser = argparse.ArgumentParser(
         description="Análisis completo de resultados de modelos de machine learning."
     )
@@ -554,157 +657,12 @@ def main():
 
     args = parser.parse_args()
 
+    # Construye las rutas específicas basadas en los argumentos
     root_path = os.path.join(args.data_root, args.mode, "results")
     output_dir = os.path.join(args.output_base, f"{args.mode}_analysis")
 
+    # Ejecuta el análisis con las rutas especificadas
     analyze_results(root_path, output_dir)
 
 if __name__ == "__main__":
     main()
-
-
-
-# def analyze_results_median(root_path, output_base='results_analysis'):
-#     csv_dir = os.path.join(output_base, 'csv')
-#     stats_dir = os.path.join(output_base, 'statistical_analysis')
-#     plots_dir = os.path.join(output_base, 'general_plots')
-    
-#     for dir_path in [csv_dir, stats_dir, plots_dir]:
-#         os.makedirs(dir_path, exist_ok=True)
-    
-#     results_folders = find_results_folders(root_path)
-    
-#     if not results_folders:
-#         print(f"No se encontraron carpetas de resultados en {root_path}")
-#         return
-    
-#     print(f"Se encontraron {len(results_folders)} carpetas de resultados")
-
-#     ######################################
-#     #      Concatenando resultados       #
-#     ######################################
-#     all_results = []
-#     for folder in results_folders:
-#         model_results = read_results_folder(folder)
-#         if not model_results.empty:
-#             if 'model' not in model_results.columns:
-#                 model_name = extract_model_name(folder)
-#                 print(f"Añadiendo columna 'model' a resultados de {model_name}")
-#                 model_results['model'] = model_name
-            
-#             all_results.append(model_results)
-    
-#     if not all_results:
-#         print("No se encontraron resultados en ninguna carpeta")
-#         return
-    
-#     combined_results = pd.concat(all_results, ignore_index=True)
-#     combined_results = process_string_lists(combined_results)
-#     combined_results = pd.concat(all_results, ignore_index=True)
-
-#     if 'model' in combined_results.columns:
-#         cols = combined_results.columns.tolist()
-#         cols.remove('model')
-#         combined_results = combined_results[['model'] + cols]
-    
-#     combined_results.to_csv(os.path.join(csv_dir, 'all_results_combined.csv'), index=False)
-#     print(f"Resultados combinados guardados en: {os.path.join(csv_dir, 'all_results_combined.csv')}")
-
-
-#     ######################################
-#     #      Epoch mediando por split      #
-#     ######################################
-    
-#     median_results = []
-#     for model in combined_results['model'].unique():
-#         for split in combined_results[combined_results['model'] == model]['split'].unique():
-#             model_split_data = combined_results[(combined_results['model'] == model) & 
-#                                                (combined_results['split'] == split)]
-            
-#             if 'val_auc' in model_split_data.columns:
-#                 median_auc = model_split_data['val_auc'].median()
-                
-#                 closest_idx = (model_split_data['val_auc'] - median_auc).abs().idxmin()
-#                 median_row = model_split_data.loc[closest_idx].to_dict()
-                
-#                 median_row['model'] = model
-#                 median_row['split'] = split
-                
-#                 median_results.append(median_row)
-            
-#     median_results_df = pd.DataFrame(median_results)
-    
-#     median_results_df.to_csv(os.path.join(csv_dir, 'median_results.csv'), index=False)
-#     print(f"Resultados de filas medianas guardados en: {os.path.join(csv_dir, 'median_results.csv')}")
-
-
-#     ########################################################
-#     #      Análisis estadístico (Friedman + Wilcoxon)      #
-#     ########################################################
-
-#     if 'val_auc' in median_results_df.columns:
-#         perform_statistical_analysis(
-#             median_results_df,
-#             'val_auc', 
-#             alpha=0.05, 
-#             output_dir=stats_dir
-#         )
-#     else:
-#         print("No se encontró la métrica val_auc para realizar análisis estadístico")
-    
-#     ##################################
-#     #      Gráficos adicionales      #
-#     ##################################
-    
-#     plot_metrics = [
-#         'val_auc', 'val_f1_binary', 'val_accuracy', 
-#         'val_balanced_accuracy', 'val_specificity', 'val_sensitivity',
-#     ]
-    
-#     existing_metrics = [m for m in plot_metrics if m in combined_results.columns]
-#     if not existing_metrics:
-#         print("No se encontraron métricas de validación en los datos")
-#         return
-    
-#     summary_stats = median_results_df.groupby('model')[existing_metrics].agg(['mean', 'std', 'min', 'max', 'median'])
-#     summary_stats.to_csv(os.path.join(csv_dir, 'model_summary_statistics.csv'))
-#     print(f"Estadísticas resumen guardadas en: {os.path.join(csv_dir, 'model_summary_statistics.csv')}")
-
-    
-#     # Gráfico de radar
-#     plot_radar_chart(
-#         summary_stats, 
-#         [m for m in existing_metrics], 
-#         output_dir=plots_dir
-#     )
-#     print(f"Gráfico de radar guardado en: {os.path.join(plots_dir, 'model_comparison_radar.png')}")
-
-    
-#     # Gráficos de barras para cada métrica
-#     plt.figure(figsize=(14, 10))
-#     for i, metric in enumerate(existing_metrics):
-#         plt.subplot(2, 3, i+1)
-        
-#         # Calculamos la mediana y ordenamos los modelos en base a ella
-#         median_values = median_results_df.groupby('model')[metric].median().sort_values(ascending=False)
-#         ordered_models = median_values.index
-        
-#         # Usamos barplot con la mediana como estimador y sin barras de error
-#         sns.barplot(
-#             x='model',
-#             y=metric,
-#             data=median_results_df,
-#             order=ordered_models,
-#             estimator=np.median,
-#             errorbar=None
-#         )
-        
-#         plt.title(f'Comparación de {metric}')
-#         plt.xticks(rotation=45, ha='right')
-    
-#     plt.tight_layout()
-#     plt.savefig(os.path.join(plots_dir, 'metrics_comparison_barplot.png'), dpi=300, bbox_inches='tight')
-#     plt.close()
-#     print(f"Gráfico de barras comparativo guardado en: {os.path.join(plots_dir, 'metrics_comparison_barplot.png')}")
-    
-#     print("\nAnálisis completado exitosamente.")    
