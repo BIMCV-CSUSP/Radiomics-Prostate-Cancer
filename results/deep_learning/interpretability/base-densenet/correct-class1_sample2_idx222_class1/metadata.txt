@@ -1,0 +1,6 @@
+Índice: 222
+Forma: torch.Size([3, 128, 128, 32])
+Nombre archivo: 11095_1001118_t2w.mha
+Clase real: 1 (csPCa)
+Predicción: 1 (csPCa)
+Probabilidades: [no_csPCa: 0.0951, csPCa: 0.9049]
