@@ -73,6 +73,7 @@ class MyDataLoader:
                 "dwi": dwi_path,
                 "label": label_tensor,
                 "patient_id": patient_id,
+                "study_id": row["study_id"],
             }
             all_data.append(data_dict)
 

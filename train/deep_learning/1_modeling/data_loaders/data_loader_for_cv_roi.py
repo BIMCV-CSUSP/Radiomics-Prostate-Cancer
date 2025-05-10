@@ -79,6 +79,7 @@ class MyDataLoader:
                 "mask": mask_path,  
                 "label": label_tensor,
                 "patient_id": patient_id,
+                "study_id": row["study_id"],
             }
             all_data.append(data_dict)
 
