@@ -1,53 +1,87 @@
-2025-04-27 20:15:09,743 - INFO - Se encontraron 3 carpetas con modelos
-2025-04-27 20:15:09,752 - INFO - Procesando modelos en: ../../../../artifacts/deep_learning/gland/models/base-densenet
-2025-04-27 20:15:09,983 - INFO - Procesando split 1/5
-2025-04-27 20:15:10,787 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-densenet/best_model_split_1.pth
-2025-04-27 20:16:42,966 - INFO - Realizadas 300 predicciones para el split 1
-2025-04-27 20:16:42,967 - INFO - Procesando split 2/5
-2025-04-27 20:16:43,474 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-densenet/best_model_split_2.pth
-2025-04-27 20:18:31,501 - INFO - Realizadas 299 predicciones para el split 2
-2025-04-27 20:18:31,502 - INFO - Procesando split 3/5
-2025-04-27 20:18:32,001 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-densenet/best_model_split_3.pth
-2025-04-27 20:20:10,635 - INFO - Realizadas 298 predicciones para el split 3
-2025-04-27 20:20:10,636 - INFO - Procesando split 4/5
-2025-04-27 20:20:11,133 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-densenet/best_model_split_4.pth
-2025-04-27 20:21:58,467 - INFO - Realizadas 305 predicciones para el split 4
-2025-04-27 20:21:58,467 - INFO - Procesando split 5/5
-2025-04-27 20:21:59,217 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-densenet/best_model_split_5.pth
-2025-04-27 20:23:46,766 - INFO - Realizadas 298 predicciones para el split 5
-2025-04-27 20:23:46,809 - INFO - Predicciones guardadas en: ../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/base-densenet_predictions.csv
-2025-04-27 20:23:46,809 - INFO - Procesando modelos en: ../../../../artifacts/deep_learning/gland/models/base-efficientnet
-2025-04-27 20:23:47,191 - INFO - Procesando split 1/5
-2025-04-27 20:23:47,431 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-efficientnet/best_model_split_1.pth
-2025-04-27 20:25:25,252 - INFO - Realizadas 300 predicciones para el split 1
-2025-04-27 20:25:25,253 - INFO - Procesando split 2/5
-2025-04-27 20:25:25,570 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-efficientnet/best_model_split_2.pth
-2025-04-27 20:27:19,229 - INFO - Realizadas 299 predicciones para el split 2
-2025-04-27 20:27:19,230 - INFO - Procesando split 3/5
-2025-04-27 20:27:19,573 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-efficientnet/best_model_split_3.pth
-2025-04-27 20:29:03,193 - INFO - Realizadas 298 predicciones para el split 3
-2025-04-27 20:29:03,193 - INFO - Procesando split 4/5
-2025-04-27 20:29:03,438 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-efficientnet/best_model_split_4.pth
-2025-04-27 20:30:46,662 - INFO - Realizadas 305 predicciones para el split 4
-2025-04-27 20:30:46,663 - INFO - Procesando split 5/5
-2025-04-27 20:30:46,907 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-efficientnet/best_model_split_5.pth
-2025-04-27 20:32:34,354 - INFO - Realizadas 298 predicciones para el split 5
-2025-04-27 20:32:34,405 - INFO - Predicciones guardadas en: ../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/base-efficientnet_predictions.csv
-2025-04-27 20:32:34,405 - INFO - Procesando modelos en: ../../../../artifacts/deep_learning/gland/models/base-resnet
-2025-04-27 20:32:34,647 - INFO - Procesando split 1/5
-2025-04-27 20:32:34,945 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-resnet/best_model_split_1.pth
-2025-04-27 20:34:13,148 - INFO - Realizadas 300 predicciones para el split 1
-2025-04-27 20:34:13,148 - INFO - Procesando split 2/5
-2025-04-27 20:34:13,426 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-resnet/best_model_split_2.pth
-2025-04-27 20:36:03,927 - INFO - Realizadas 299 predicciones para el split 2
-2025-04-27 20:36:03,928 - INFO - Procesando split 3/5
-2025-04-27 20:36:04,224 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-resnet/best_model_split_3.pth
-2025-04-27 20:37:45,210 - INFO - Realizadas 298 predicciones para el split 3
-2025-04-27 20:37:45,210 - INFO - Procesando split 4/5
-2025-04-27 20:37:45,607 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-resnet/best_model_split_4.pth
-2025-04-27 20:39:32,601 - INFO - Realizadas 305 predicciones para el split 4
-2025-04-27 20:39:32,602 - INFO - Procesando split 5/5
-2025-04-27 20:39:32,905 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-resnet/best_model_split_5.pth
-2025-04-27 20:41:21,361 - INFO - Realizadas 298 predicciones para el split 5
-2025-04-27 20:41:21,413 - INFO - Predicciones guardadas en: ../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/base-resnet_predictions.csv
-2025-04-27 20:41:21,413 - INFO - Proceso de generación de predicciones completado
+2025-05-14 10:28:01,212 - INFO - Se encontraron 5 carpetas con modelos
+2025-05-14 10:28:01,214 - INFO - Procesando modelos en: ../../../../artifacts/deep_learning/gland/models/base-vit
+2025-05-14 10:28:01,452 - INFO - Procesando split 1/5
+2025-05-14 10:28:02,964 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-vit/best_model_split_1.pth
+2025-05-14 10:29:37,890 - INFO - Realizadas 300 predicciones para el split 1
+2025-05-14 10:29:37,891 - INFO - Procesando split 2/5
+2025-05-14 10:29:40,471 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-vit/best_model_split_2.pth
+2025-05-14 10:31:29,931 - INFO - Realizadas 299 predicciones para el split 2
+2025-05-14 10:31:29,932 - INFO - Procesando split 3/5
+2025-05-14 10:31:32,158 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-vit/best_model_split_3.pth
+2025-05-14 10:33:08,476 - INFO - Realizadas 298 predicciones para el split 3
+2025-05-14 10:33:08,477 - INFO - Procesando split 4/5
+2025-05-14 10:33:10,910 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-vit/best_model_split_4.pth
+2025-05-14 10:34:49,616 - INFO - Realizadas 305 predicciones para el split 4
+2025-05-14 10:34:49,617 - INFO - Procesando split 5/5
+2025-05-14 10:34:52,213 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/base-vit/best_model_split_5.pth
+2025-05-14 10:36:38,705 - INFO - Realizadas 298 predicciones para el split 5
+2025-05-14 10:36:38,746 - INFO - Predicciones guardadas en: ../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/base-vit_predictions.csv
+2025-05-14 10:36:38,746 - INFO - Procesando modelos en: ../../../../artifacts/deep_learning/gland/models/config3
+2025-05-14 10:36:38,977 - INFO - Procesando split 1/5
+2025-05-14 10:36:41,439 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config3/best_model_split_1.pth
+2025-05-14 10:38:15,340 - INFO - Realizadas 300 predicciones para el split 1
+2025-05-14 10:38:15,341 - INFO - Procesando split 2/5
+2025-05-14 10:38:17,831 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config3/best_model_split_2.pth
+2025-05-14 10:40:06,596 - INFO - Realizadas 299 predicciones para el split 2
+2025-05-14 10:40:06,596 - INFO - Procesando split 3/5
+2025-05-14 10:40:09,090 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config3/best_model_split_3.pth
+2025-05-14 10:41:48,806 - INFO - Realizadas 298 predicciones para el split 3
+2025-05-14 10:41:48,807 - INFO - Procesando split 4/5
+2025-05-14 10:41:51,129 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config3/best_model_split_4.pth
+2025-05-14 10:43:33,516 - INFO - Realizadas 305 predicciones para el split 4
+2025-05-14 10:43:33,517 - INFO - Procesando split 5/5
+2025-05-14 10:43:36,184 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config3/best_model_split_5.pth
+2025-05-14 10:45:18,272 - INFO - Realizadas 298 predicciones para el split 5
+2025-05-14 10:45:18,325 - INFO - Predicciones guardadas en: ../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/config3_predictions.csv
+2025-05-14 10:45:18,326 - INFO - Procesando modelos en: ../../../../artifacts/deep_learning/gland/models/config6
+2025-05-14 10:45:18,572 - INFO - Procesando split 1/5
+2025-05-14 10:45:21,669 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config6/best_model_split_1.pth
+2025-05-14 10:46:53,598 - INFO - Realizadas 300 predicciones para el split 1
+2025-05-14 10:46:53,599 - INFO - Procesando split 2/5
+2025-05-14 10:46:56,635 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config6/best_model_split_2.pth
+2025-05-14 10:48:44,587 - INFO - Realizadas 299 predicciones para el split 2
+2025-05-14 10:48:44,587 - INFO - Procesando split 3/5
+2025-05-14 10:48:47,794 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config6/best_model_split_3.pth
+2025-05-14 10:50:24,606 - INFO - Realizadas 298 predicciones para el split 3
+2025-05-14 10:50:24,606 - INFO - Procesando split 4/5
+2025-05-14 10:50:27,627 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config6/best_model_split_4.pth
+2025-05-14 10:52:09,279 - INFO - Realizadas 305 predicciones para el split 4
+2025-05-14 10:52:09,280 - INFO - Procesando split 5/5
+2025-05-14 10:52:12,505 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config6/best_model_split_5.pth
+2025-05-14 10:53:57,615 - INFO - Realizadas 298 predicciones para el split 5
+2025-05-14 10:53:57,666 - INFO - Predicciones guardadas en: ../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/config6_predictions.csv
+2025-05-14 10:53:57,666 - INFO - Procesando modelos en: ../../../../artifacts/deep_learning/gland/models/config7
+2025-05-14 10:53:57,898 - INFO - Procesando split 1/5
+2025-05-14 10:53:58,224 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config7/best_model_split_1.pth
+2025-05-14 10:55:35,032 - INFO - Realizadas 300 predicciones para el split 1
+2025-05-14 10:55:35,032 - INFO - Procesando split 2/5
+2025-05-14 10:55:35,306 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config7/best_model_split_2.pth
+2025-05-14 10:57:27,583 - INFO - Realizadas 299 predicciones para el split 2
+2025-05-14 10:57:27,584 - INFO - Procesando split 3/5
+2025-05-14 10:57:27,890 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config7/best_model_split_3.pth
+2025-05-14 10:59:09,015 - INFO - Realizadas 298 predicciones para el split 3
+2025-05-14 10:59:09,016 - INFO - Procesando split 4/5
+2025-05-14 10:59:09,298 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config7/best_model_split_4.pth
+2025-05-14 11:00:53,045 - INFO - Realizadas 305 predicciones para el split 4
+2025-05-14 11:00:53,046 - INFO - Procesando split 5/5
+2025-05-14 11:00:53,332 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config7/best_model_split_5.pth
+2025-05-14 11:02:40,584 - INFO - Realizadas 298 predicciones para el split 5
+2025-05-14 11:02:40,637 - INFO - Predicciones guardadas en: ../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/config7_predictions.csv
+2025-05-14 11:02:40,637 - INFO - Procesando modelos en: ../../../../artifacts/deep_learning/gland/models/config8
+2025-05-14 11:02:40,875 - INFO - Procesando split 1/5
+2025-05-14 11:02:41,369 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config8/best_model_split_1.pth
+2025-05-14 11:04:19,059 - INFO - Realizadas 300 predicciones para el split 1
+2025-05-14 11:04:19,059 - INFO - Procesando split 2/5
+2025-05-14 11:04:19,688 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config8/best_model_split_2.pth
+2025-05-14 11:06:10,378 - INFO - Realizadas 299 predicciones para el split 2
+2025-05-14 11:06:10,379 - INFO - Procesando split 3/5
+2025-05-14 11:06:10,928 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config8/best_model_split_3.pth
+2025-05-14 11:07:52,459 - INFO - Realizadas 298 predicciones para el split 3
+2025-05-14 11:07:52,459 - INFO - Procesando split 4/5
+2025-05-14 11:07:52,995 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config8/best_model_split_4.pth
+2025-05-14 11:09:36,542 - INFO - Realizadas 305 predicciones para el split 4
+2025-05-14 11:09:36,542 - INFO - Procesando split 5/5
+2025-05-14 11:09:37,097 - INFO - Modelo cargado: ../../../../artifacts/deep_learning/gland/models/config8/best_model_split_5.pth
+2025-05-14 11:11:25,847 - INFO - Realizadas 298 predicciones para el split 5
+2025-05-14 11:11:25,899 - INFO - Predicciones guardadas en: ../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/config8_predictions.csv
+2025-05-14 11:11:25,900 - INFO - Proceso de generación de predicciones completado

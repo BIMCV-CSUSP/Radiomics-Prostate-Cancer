@@ -1,26 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-Script para análisis de interpretabilidad de modelos de aprendizaje profundo
-para clasificación de cáncer de próstata.
-
-Uso:
-    python interpretability_analysis.py --model-type base-densenet --criteria correct_class1 --max-samples 3
-
-Argumentos:
-    --model-type: Tipo de modelo a analizar (ej. base-densenet, base-efficientnet)
-    --criteria: Criterio de selección de muestras (correct_class0, correct_class1, incorrect, high_confidence, any)
-    --max-samples: Número máximo de muestras a analizar
-    --skip-gradcam: Si se especifica, no se calcula GradCAM
-    --skip-occlusion: Si se especifica, no se calculan mapas de oclusión
-    --skip-aggregated: Si se especifica, no se utilizan mapas agregados
-    --max-attempts: Número máximo de intentos para encontrar muestras aleatorias
-    --split: Split específico a usar (si no se especifica, se usa el mejor split)
-    --project-root: Ruta raíz del proyecto (opcional)
-    --output-dir: Directorio donde guardar los resultados (opcional)
-"""
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -32,15 +9,26 @@ import glob
 import json
 import importlib
 import sys
+import random
 import argparse
 from sklearn.model_selection import StratifiedGroupKFold
+
+from z_data_loader_for_explicability_roi import MyDataLoader
+
+plt.style.use('dark_background')
+plt.rcParams['figure.figsize'] = (12, 8)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Utilizando dispositivo: {device}")
 
 def parse_arguments():
     """Parsea los argumentos de línea de comandos."""
     parser = argparse.ArgumentParser(description="Análisis de interpretabilidad de modelos de deep learning")
     
-    parser.add_argument("--model-type", type=str, default="base-densenet",
-                        help="Tipo de modelo a analizar (ej. base-densenet)")
+    parser.add_argument("--model-type", type=str, default="config1",
+                        help="Tipo de modelo a analizar")
+    
+    parser.add_argument("--preselected-indices", type=str, default=None,
+                        help="Índices de muestra preseleccionados (ej: 5,23,42)")
     
     parser.add_argument("--criteria", type=str, default="correct_class1",
                         choices=["correct_class0", "correct_class1", "incorrect", "high_confidence", "any"],
@@ -70,13 +58,15 @@ def parse_arguments():
     parser.add_argument("--output-dir", type=str, default="../../../results/deep_learning/interpretability",
                         help="Directorio donde guardar los resultados")
     
-    return parser.parse_args()
+    args = parser.parse_args()
 
-def dynamic_import(class_path):
-    """Importa dinámicamente una clase desde una ruta."""
-    module_name, class_name = class_path.rsplit('.', 1)
-    module = importlib.import_module(module_name)
-    return getattr(module, class_name)
+    if args.preselected_indices is not None:
+        args.preselected_indices = [int(x) for x in args.preselected_indices.split(",") if x.strip()]
+    else:
+        args.preselected_indices = None
+
+    return args
+
 
 def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_root=None):
     """
@@ -86,14 +76,11 @@ def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_roo
         model_dir: Directorio donde se encuentra el modelo
         csv_path: Ruta al CSV de datos
         split_to_use: Split específico a usar como test (si es None, usa el mejor split)
-        project_root: Ruta raíz del proyecto (opcional)
     
     Returns:
         model: Modelo cargado
         test_dataloader: DataLoader con los datos de test
-        split_used: Split utilizado
     """
-    
     # Cargar configuración desde config.json
     config_path = os.path.join(project_root, "train/deep_learning/1_modeling/config.json")
     with open(config_path, 'r') as f:
@@ -105,6 +92,7 @@ def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_roo
         raise ValueError(f"Tipo de modelo {model_type} no encontrado en config.json")
     
     model_config = config[model_type]
+
     # Importar dinámicamente la clase del modelo
     model_class_path = model_config["model"]
     module_path, class_name = model_class_path.rsplit(".", 1)
@@ -121,7 +109,7 @@ def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_roo
         # Intentar determinar cuál fue el mejor split usado para este modelo
         base_dir = os.path.dirname(os.path.dirname(model_dir))  # Sube dos niveles (para saltar "models")
         results_dir = os.path.join(base_dir, "results", os.path.basename(model_dir))
-        print(f"Buscando mejores resultados en: {results_dir}")
+        print(results_dir)
         split_files = glob.glob(os.path.join(results_dir, "split_*_results.csv"))
         best_auc = -np.inf
         best_split = None
@@ -144,15 +132,6 @@ def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_roo
     model.load_state_dict(torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu")))
     model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     model.eval()
-    
-    # Determinar modo de datos (full o gland)
-    if "gland" in model_dir:
-        loader_module = "data_loaders.data_loader_for_cv_roi"
-    else:
-        loader_module = "data_loaders.data_loader_for_cv_org"
-    
-    # Importar dinámicamente la clase de carga de datos
-    MyDataLoader = dynamic_import(f"{loader_module}.MyDataLoader")
     
     # Preparar datos
     data_loader = MyDataLoader(
@@ -194,6 +173,7 @@ def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_roo
     )
     
     return model, test_dataloader, split_to_use
+
 
 def calculate_occlusion_sensitivity(model, test_dataloader, maps_dir, occlusion_dir):
     """
@@ -265,651 +245,767 @@ def calculate_occlusion_sensitivity(model, test_dataloader, maps_dir, occlusion_
     
     return True
 
-def comprehensive_model_interpretation(dataloader, model, model_results_dir, criteria='correct_class0', 
-                                   max_samples=3, max_attempts=100, csv_path=None,
-                                   use_gradcam=True, use_occlusion=True, use_aggregated_maps=True,
-                                   maps_dir=None, sensitivity_maps_dir=None):
+def seleccionar_indices_muestras(
+    dataloader,
+    model,
+    model_results_dir,
+    csv_path,
+    criteria,
+    preselected_indices = None,   
+    max_samples = 3,
+    max_attempts = 100,
+    verbose = True,
+):
     """
-    Aplica múltiples técnicas de interpretabilidad a las mismas muestras seleccionadas.
-    Para criteria='correct_class1', selecciona muestras ordenadas por ISUP (descendente).
-    
-    Args:
-        dataloader: DataLoader con las muestras
-        model: Modelo entrenado para hacer predicciones
-        model_results_dir: Directorio de resultados específico para este modelo (ya creado)
-        criteria: Criterio de selección ('correct_class0', 'correct_class1', 'incorrect', 'high_confidence', 'any')
-        max_samples: Número máximo de muestras a procesar
-        max_attempts: Número máximo de intentos para encontrar muestras aleatorias (no aplica para correct_class1)
-        csv_path: Ruta al CSV con información ISUP (requerido para criteria='correct_class1')
-        use_gradcam: Si se debe aplicar GradCAM y GuidedBackpropSmoothGrad
-        use_occlusion: Si se debe buscar mapas de oclusión individuales
-        use_aggregated_maps: Si se deben usar mapas de calor agregados por clase
-        maps_dir: Directorio donde se encuentran los mapas agregados
-        sensitivity_maps_dir: Directorio donde se encuentran los mapas de sensibilidad
+    Devuelve una lista de dict:
+        { idx, true_class, dir }
+
+    Para cada muestra aceptada se crea:
+        <dir>/metadata.txt   con:
+            Índice …
+            Forma …
+            Nombre archivo …
+            Clase real …
+            Predicción …
+            Probabilidades …
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    model.eval()
-    
-    # Verificar directorios necesarios
-    if use_aggregated_maps and maps_dir is None:
-        print("⚠ Se requiere el directorio de mapas agregados para use_aggregated_maps=True")
-        use_aggregated_maps = False
-    
-    if use_occlusion and sensitivity_maps_dir is None:
-        print("⚠ Se requiere el directorio de mapas de sensibilidad para use_occlusion=True")
-        use_occlusion = False
-    
-    # Cargar mapas agregados si se requieren
-    if use_aggregated_maps:
-        try:
-            maps = torch.load(maps_dir)
-            print(f"✓ Mapas agregados cargados desde {maps_dir}")
-        except Exception as e:
-            print(f"⚠ Error al cargar mapas agregados: {e}")
-            use_aggregated_maps = False
-    
-    # Inicializar CAM y GBP si se requieren
-    if use_gradcam:
-        try:
-            if "EfficientNet" in str(type(model)):
-                target_layer = "_conv_head"
-                fc_layer = "_fc"
-            elif "DenseNet" in str(type(model)):
-                target_layer = "features.norm5"
-                fc_layer = "class_layers.out"
-            else:
-                # Configuración predeterminada o para otros modelos
-                print("Arquitectura de modelo no reconocida, intentando con configuración predeterminada")
-                target_layer = "_conv_head"
-                fc_layer = "_fc"
-            
-            cam = monai.visualize.class_activation_maps.CAM(
-                nn_module=model, 
-                target_layers=target_layer, 
-                fc_layers=fc_layer
+    os.makedirs(model_results_dir, exist_ok=True)
+    selected_info: list[dict] = []
+    sample_counter = 0
+    already_selected: set[int] = set()
+
+    # helper -------------------------------------------------------------
+    def _save_metadata(idx, img, filename, true_c, pred_c, probs, out_dir):
+        names = ("no_csPCa", "csPCa")
+        with open(os.path.join(out_dir, "metadata.txt"), "w") as f:
+            f.write(f"Índice: {idx}\n")
+            f.write(f"Forma: {tuple(img.shape)}\n")
+            f.write(f"Nombre archivo: {filename}\n")
+            f.write(f"Clase real: {true_c} ({names[true_c]})\n")
+            f.write(f"Predicción: {pred_c} ({names[pred_c]})\n")
+            f.write(
+                f"Probabilidades: [no_csPCa: {probs[0]:.4f}, "
+                f"csPCa: {probs[1]:.4f}]\n"
             )
-            gbp = monai.visualize.gradient_based.GuidedBackpropSmoothGrad(
-                model, 
-                n_samples=50
-            )
-            print("✓ GradCAM y GuidedBackpropSmoothGrad inicializados")
-        except Exception as e:
-            print(f"⚠ Error al inicializar GradCAM: {e}")
-            use_gradcam = False
-    
-    # Crear directorio para análisis completo dentro del directorio del modelo
-    results_base_dir = os.path.join(model_results_dir)
-    os.makedirs(results_base_dir, exist_ok=True)
-    print(f"Los resultados se guardarán en: {results_base_dir}")
-    
-    # Variables para almacenar muestras seleccionadas
-    selected_samples = []
-    
-    # Parte 1: Selección de muestras
-    print("\n" + "="*80)
-    print("FASE 1: SELECCIÓN DE MUESTRAS")
-    print("="*80)
-    
-    # ========= CASO ESPECIAL: SELECCIÓN POR ISUP PARA 'correct_class1' =========
-    if criteria == 'correct_class1' and csv_path is not None:
-        print("Modo de selección: Casos csPCa ordenados por ISUP descendente")
-        
-        # Cargar CSV con información ISUP
-        try:
-            isup_data = pd.read_csv(csv_path)
-            print(f"✓ CSV cargado con {len(isup_data)} registros")
-        except Exception as e:
-            print(f"⚠ Error al cargar CSV: {e}")
-            return
-        
-        # Diccionarios para almacenar candidatos por nivel ISUP
-        samples_found = 0
-        
-        # Buscar secuencialmente por ISUP decreciente
-        for isup_target in [5, 4, 3, 2, 1]:
-            if samples_found >= max_samples:
-                break
-                
-            print(f"\nBuscando casos con ISUP {isup_target}...")
-            
-            # Recorrer dataset hasta encontrar suficientes casos o agotarlo
-            for idx in range(len(dataloader.dataset)):
-                if samples_found >= max_samples:
-                    break
-                    
+
+    device = next(model.parameters()).device
+
+    # =====================================================================
+    # (0) ÍNDICES PRESELECCIONADOS
+    # =====================================================================
+    if preselected_indices:
+        if verbose:
+            print(f"[Selección] índices dados: {preselected_indices}")
+
+        for idx in preselected_indices[:max_samples]:
+            try:
+                sample = dataloader.dataset[idx]
+                img    = sample["image"].to(device)
+                label  = sample["label"]
+                true_c = int(label.argmax())
+
+                with torch.no_grad():
+                    probs = torch.softmax(model(img.unsqueeze(0)), dim=1)[0].cpu()
+                pred_c = int(probs.argmax())
+
+                sample_counter += 1
+                already_selected.add(idx)
+
+                dir_name = f"manual_sample{sample_counter}_idx{idx}_class{true_c}"
+                dir_path = os.path.join(model_results_dir, dir_name)
+                os.makedirs(dir_path, exist_ok=True)
+
+                # nombre de archivo o genérico
                 try:
-                    # Obtener datos de la muestra
-                    sample = dataloader.dataset[idx]
-                    img = sample['image'].to(device)
-                    label = sample['label']
-                    true_class = label.argmax().item()
-                    
-                    # Solo procesamos casos csPCa (clase 1)
-                    if true_class != 1:
-                        continue
-                    
-                    # Verificar mapas de oclusión si es necesario
-                    filename = None
-                    if use_occlusion:
-                        try:
-                            filename = os.path.basename(img.meta['filename_or_obj'])
-                            map_path = os.path.join(sensitivity_maps_dir, f"class{true_class}_{filename}")
-                            
-                            if not os.path.exists(map_path):
-                                continue
-                        except Exception:
-                            continue
-                    else:
-                        try:
-                            filename = os.path.basename(img.meta['filename_or_obj'])
-                        except Exception:
-                            filename = f"sample_{idx}"
-                    
-                    # Extraer patient_id y study_id del nombre del archivo
-                    try:
-                        parts = filename.split('_')
-                        patient_id = int(parts[0])
-                        study_id_part = parts[1].split('.')[0]
-                        study_id = int(study_id_part)
-                        
-                        # Buscar información ISUP en el CSV
-                        patient_data = isup_data[
-                            (isup_data['patient_id'] == patient_id) & 
-                            (isup_data['study_id'] == study_id)
-                        ]
-                        
-                        if len(patient_data) == 0:
-                            continue
-                        
-                        # Obtener valor ISUP
-                        isup_value = patient_data.iloc[0]['case_ISUP']
-                        
-                        # Solo considerar casos con el ISUP objetivo
-                        if isup_value != isup_target:
-                            continue
-                        
-                        # Hacer predicción
-                        with torch.no_grad():
-                            output = model(img.unsqueeze(0))
-                            pred = torch.nn.functional.softmax(output, dim=1)
-                            pred_class = pred.argmax().item()
-                        
-                        # Solo considerar predicciones correctas
-                        if pred_class != 1:
-                            continue
-                        
-                        # ¡Caso válido encontrado!
-                        sample_info = {
-                            "idx": idx,
-                            "img": img,
-                            "label": label,
-                            "true_class": true_class,
-                            "pred": pred,
-                            "pred_class": pred_class,
-                            "filename": filename,
-                            # Guardamos isup para referencia interna, no se mostrará en metadatos
-                            "isup": isup_value
-                        }
-                        
-                        selected_samples.append(sample_info)
-                        samples_found += 1
-                        
-                        print(f"✓ Muestra {samples_found}/{max_samples} encontrada")
-                        print(f"  ID: {idx}")
-                        print(f"  ISUP: {isup_value}")
-                        print(f"  Confianza: {pred[0, 1].item():.4f}")
-                        
-                        # Si ya tenemos suficientes muestras, terminamos
-                        if samples_found >= max_samples:
-                            break
-                        
-                    except Exception as e:
-                        continue
-                        
-                except Exception:
-                    continue
-            
-            # Mostrar resultados para este ISUP
-            samples_this_isup = len([s for s in selected_samples if s["isup"] == isup_target])
-            print(f"Encontrados {samples_this_isup} casos con ISUP {isup_target}")
-        
-        # Verificar si encontramos suficientes muestras
-        if len(selected_samples) == 0:
-            print("⚠ No se encontraron muestras que cumplan los criterios")
-            return
-        
-        print(f"\n✓ Seleccionadas {len(selected_samples)} muestras para análisis")
-    
-    # ========= SELECCIÓN ESTÁNDAR PARA OTROS CRITERIOS =========
-    else:
-        # Selección aleatoria según criterios originales
-        print(f"Modo de selección: Aleatorio según criterio '{criteria}'")
-        
-        samples_processed = 0
-        for attempt in range(max_attempts):
-            if samples_processed >= max_samples:
-                break
-                
-            # Seleccionar muestra aleatoria
-            idx = np.random.randint(0, len(dataloader.dataset))
-            img = dataloader.dataset[idx]['image'].to(device)
-            label = dataloader.dataset[idx]['label']
-            true_class = label.argmax().item()
-            
-            # Comprobar si ya tenemos esta muestra
-            if idx in [s["idx"] for s in selected_samples]:
-                print(f"Intento {attempt+1}: Muestra {idx} ya seleccionada anteriormente")
-                continue
-                
-            # Verificar mapas de oclusión si es necesario
-            if use_occlusion:
-                try:
-                    filename = os.path.basename(img.meta['filename_or_obj'])
-                    map_path = os.path.join(sensitivity_maps_dir, f"class{true_class}_{filename}")
-                    
-                    if not os.path.exists(map_path):
-                        continue
-                except (KeyError, AttributeError) as e:
-                    print(f"Intento {attempt+1}: Error al verificar mapa de oclusión: {e}")
-                    continue
-            else:
-                try:
-                    filename = os.path.basename(img.meta['filename_or_obj'])
+                    filename = os.path.basename(img.meta["filename_or_obj"])
                 except Exception:
                     filename = f"sample_{idx}"
-            
-            # Hacer predicción
-            with torch.no_grad():
-                output = model(img.unsqueeze(0))
-                pred = torch.nn.functional.softmax(output, dim=1)
-                pred_class = pred.argmax().item()
-            
-            # Verificar criterios
-            if criteria == 'correct_class0' and (pred_class != 0 or true_class != 0):
-                continue
-                
-            elif criteria == 'incorrect' and pred_class == true_class:
-                continue
-                
-            elif criteria == 'high_confidence' and pred[0, pred_class].item() <= 0.9:
-                continue
-            
-            # Si llegamos aquí, la muestra cumple todos los criterios
-            print(f"✓ Muestra {samples_processed+1} encontrada (intento {attempt+1})")
-            print(f"  ID: {idx}")
-            print(f"  Forma: {img.shape}")
-            print(f"  Etiqueta real: {true_class} ({'no_csPCa' if true_class==0 else 'csPCa'})")
-            print(f"  Predicción: {pred_class} ({'no_csPCa' if pred_class==0 else 'csPCa'})")
-            print(f"  Confianza: {pred[0, pred_class].item():.4f}")
-            
-            # Guardar información de la muestra
-            sample_info = {
-                "idx": idx,
-                "img": img,
-                "label": label,
-                "true_class": true_class,
-                "pred": pred,
-                "pred_class": pred_class,
-                "filename": filename
-            }
-            
-            selected_samples.append(sample_info)
-            samples_processed += 1
-        
-        # Verificar si encontramos suficientes muestras
-        if len(selected_samples) == 0:
-            print(f"⚠ No se encontraron muestras que cumplan con el criterio '{criteria}' después de {max_attempts} intentos")
-            return
-        
-        print(f"\n✓ Seleccionadas {len(selected_samples)} muestras para análisis")
-    
-    # Parte 2: Aplicar técnicas de interpretabilidad a cada muestra
-    for i, sample in enumerate(selected_samples):
-        print("\n" + "="*80)
-        print(f"ANÁLISIS DE MUESTRA {i+1}/{len(selected_samples)}")
-        print("="*80)
-        
-        # Extraer información de la muestra
-        idx = sample["idx"]
-        img = sample["img"]
-        true_class = sample["true_class"]
-        pred_class = sample["pred_class"]
-        pred = sample["pred"]
-        filename = sample["filename"]
-        
-        # Crear nombre de directorio homogeneizado para todos los casos
-        criteria_name = criteria.replace('_', '-')
-        sample_dir_name = f"{criteria_name}_sample{i+1}_idx{idx}_class{true_class}"
-        
-        sample_dir = os.path.join(results_base_dir, sample_dir_name)
-        os.makedirs(sample_dir, exist_ok=True)
-        
-        # Guardar metadatos homogeneizados
-        with open(os.path.join(sample_dir, "metadata.txt"), 'w') as f:
-            f.write(f"Índice: {idx}\n")
-            f.write(f"Forma: {img.shape}\n")
-            f.write(f"Nombre archivo: {filename}\n")
-            f.write(f"Clase real: {true_class} ({'no_csPCa' if true_class==0 else 'csPCa'})\n")
-            f.write(f"Predicción: {pred_class} ({'no_csPCa' if pred_class==0 else 'csPCa'})\n")
-            f.write(f"Probabilidades: [no_csPCa: {pred[0, 0].item():.4f}, csPCa: {pred[0, 1].item():.4f}]\n")
-        
-        # 1. Guardar visualización de canales originales
-        channel_names = ['T2W', 'ADC', 'DWI']
-        plt.figure(figsize=(18, 6))
-        for c_idx, c_name in enumerate(channel_names):
-            plt.subplot(1, 3, c_idx+1)
-            slice_idx = img.shape[3] // 2  # Slice central
-            plt.imshow(img[c_idx, :, :, slice_idx].cpu().numpy(), cmap='gray')
-            plt.title(f"Canal {c_name}")
-        
-        plt.suptitle(f"Imagen original - Clase: {true_class} ({'no_csPCa' if true_class==0 else 'csPCa'})")
-        plt.tight_layout()
-        plt.savefig(os.path.join(sample_dir, "original_channels.png"), dpi=300)
-        plt.close()
-        
-        # 2. Aplicar GradCAM si está habilitado
-        if use_gradcam:
-            print("\nAplicando GradCAM y GuidedBackpropSmoothGrad...")
-            gradcam_dir = os.path.join(sample_dir, "GradCAM")
-            os.makedirs(gradcam_dir, exist_ok=True)
-            
-            try:
-                # Generar mapas
-                cam_result = cam(x=img.unsqueeze(0)).squeeze(0).cpu()
-                gbp_result = gbp(x=img.unsqueeze(0)).squeeze(0).cpu()
-                
-                # Normalizar resultados
-                gbp_result = 255*(gbp_result - gbp_result.min())/(gbp_result.max() - gbp_result.min())
-                cam_result = 255*(cam_result - cam_result.min())/(cam_result.max() - cam_result.min())
-                result = cam_result * gbp_result
-                result = (result - result.min())/(result.max() - result.min())
-                
-                # Center crop para mejor visualización
-                img_cropped = monai.transforms.CenterSpatialCrop(roi_size=(64, 64, -1))(img)
-                cam_result_cropped = monai.transforms.CenterSpatialCrop(roi_size=(64, 64, -1))(cam_result)
-                gbp_result_cropped = monai.transforms.CenterSpatialCrop(roi_size=(64, 64, -1))(gbp_result)
-                result_cropped = monai.transforms.CenterSpatialCrop(roi_size=(64, 64, -1))(result)
-                
-                # Guardar visualizaciones 3D
-                # GBP Result
-                plt.figure(figsize=(12, 8))
-                monai.visualize.matshow3d(volume=gbp_result_cropped[1:2], frame_dim=-1, channel_dim=0, every_n=2, margin=6, show=False)
-                plt.suptitle(f"Guided Backpropagation (canal ADC)")
-                plt.savefig(os.path.join(gradcam_dir, "GBP_3D.png"), dpi=300)
-                plt.close()
-                
-                # CAM Result
-                plt.figure(figsize=(12, 8))
-                monai.visualize.matshow3d(volume=cam_result_cropped, frame_dim=-1, channel_dim=0, every_n=2, margin=6, show=False)
-                plt.suptitle(f"Class Activation Map (todos los canales)")
-                plt.savefig(os.path.join(gradcam_dir, "CAM_3D.png"), dpi=300)
-                plt.close()
-                
-                # Combined Result
-                plt.figure(figsize=(12, 8))
-                monai.visualize.matshow3d(volume=result_cropped, frame_dim=-1, channel_dim=0, every_n=2, margin=6, fill_value=255, show=False, cmap='gray')
-                plt.suptitle(f"Resultado combinado GradCAM * GBP")
-                plt.savefig(os.path.join(gradcam_dir, "Combined_3D.png"), dpi=300)
-                plt.close()
-                
-                # Visualizaciones combinadas para cada canal
-                for c_idx, c_name in enumerate(channel_names):
-                    blended = monai.visualize.utils.blend_images(
-                        255*img_cropped.cpu()[c_idx:c_idx+1], 
-                        255*result_cropped[c_idx:c_idx+1], 
-                        alpha=0.2,
-                        transparent_background=True
-                    )
-                    plt.figure(figsize=(12, 8))
-                    monai.visualize.matshow3d(volume=blended, frame_dim=-1, channel_dim=0, every_n=2, margin=6, show=False)
-                    plt.suptitle(f"Canal {c_name} con mapa combinado superpuesto")
-                    plt.savefig(os.path.join(gradcam_dir, f"Blended_{c_name}_3D.png"), dpi=300)
-                    plt.close()
-                
-                print(f"✓ Resultados GradCAM guardados en {gradcam_dir}")
-                
-            except Exception as e:
-                print(f"⚠ Error al procesar GradCAM: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        # 3. Aplicar visualización de mapas agregados si está habilitado
-        if use_aggregated_maps:
-            print("\nAplicando visualización de mapas agregados...")
-            aggregated_dir = os.path.join(sample_dir, "AggregatedMaps")
-            os.makedirs(aggregated_dir, exist_ok=True)
-            
-            try:
-                # Normalizar los mapas
-                no_csPCa = (maps["no_csPCa"] - maps["no_csPCa"].min()) / (maps["no_csPCa"].max() - maps["no_csPCa"].min())
-                csPCa = (maps["csPCa"] - maps["csPCa"].min()) / (maps["csPCa"].max() - maps["csPCa"].min())
-                
-                # Umbral para filtrar valores
-                threshold = 0.7
-                
-                # Visualizar mapas para cada canal
-                for c_idx, c_name in enumerate(channel_names):
-                    # Visualización de cada clase
-                    for map_class, map_name, map_data in [
-                        (0, "no_csPCa", no_csPCa), 
-                        (1, "csPCa", csPCa)
-                    ]:
-                        # Aplicar umbral
-                        thresholded_map = torch.where(
-                            map_data.cpu()[c_idx:c_idx+1] > threshold,
-                            map_data.cpu()[c_idx:c_idx+1],
-                            torch.zeros_like(map_data.cpu()[c_idx:c_idx+1])
-                        )
-                        
-                        # Mezclar con la imagen original
-                        blended = monai.visualize.utils.blend_images(
-                            255 * img.cpu()[c_idx:c_idx+1],
-                            255 * thresholded_map,
-                            alpha=0.3,
-                            transparent_background=True
-                        )
-                        
-                        # Visualizar
-                        plt.figure(figsize=(15, 10))
-                        monai.visualize.matshow3d(
-                            volume=blended,
-                            frame_dim=-1,
-                            channel_dim=0,
-                            every_n=4,
-                            margin=10,
-                            figsize=(15, 10),
-                            show=False
-                        )
-                        
-                        plt.suptitle(
-                            f"Canal {c_name} con mapa agregado para clase {map_name}\n" +
-                            f"Clase real: {true_class} ({'no_csPCa' if true_class==0 else 'csPCa'}), " +
-                            f"Predicción: {pred_class} ({'no_csPCa' if pred_class==0 else 'csPCa'})",
-                            fontsize=14
-                        )
-                        
-                        plt.tight_layout()
-                        plt.savefig(os.path.join(aggregated_dir, f"{c_name}_map_{map_name}.png"), dpi=300)
-                        plt.close()
-                
-                print(f"✓ Resultados de mapas agregados guardados en {aggregated_dir}")
-                
-            except Exception as e:
-                print(f"⚠ Error al procesar mapas agregados: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        # 4. Aplicar visualización de mapas de oclusión individuales si está habilitado
-        if use_occlusion:
-            print("\nAplicando visualización de mapas de oclusión individuales...")
-            occlusion_dir = os.path.join(sample_dir, "OcclusionSensitivity")
-            os.makedirs(occlusion_dir, exist_ok=True)
-            
-            try:
-                # Cargar mapa de oclusión
-                map_path = os.path.join(sensitivity_maps_dir, f"class{true_class}_{filename}")
-                heatmap = torch.load(map_path)
-                
-                # Normalizar el mapa
-                heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
-                
-                # Umbral para filtrar valores
-                threshold = 0.8
-                
-                # Visualizar para cada canal
-                for c_idx, c_name in enumerate(channel_names):
-                    # Aplicar umbral
-                    thresholded_map = torch.where(
-                        heatmap.cpu() > threshold,
-                        heatmap.cpu(),
-                        torch.zeros_like(heatmap.cpu())
-                    )
-                    
-                    # Mezclar con la imagen original
-                    blended = monai.visualize.utils.blend_images(
-                        255 * img.cpu()[c_idx:c_idx+1],
-                        255 * thresholded_map,
-                        alpha=0.2,
-                        transparent_background=True
-                    )
-                    
-                    # Visualizar
-                    plt.figure(figsize=(15, 10))
-                    monai.visualize.matshow3d(
-                        volume=blended,
-                        frame_dim=-1,
-                        channel_dim=0,
-                        every_n=2,
-                        margin=10,
-                        show=False
-                    )
-                    
-                    plt.suptitle(
-                        f"Canal {c_name} con mapa de oclusión individual\n" +
-                        f"Clase real: {true_class} ({'no_csPCa' if true_class==0 else 'csPCa'}), " +
-                        f"Predicción: {pred_class} ({'no_csPCa' if pred_class==0 else 'csPCa'})",
-                        fontsize=14
-                    )
-                    
-                    plt.tight_layout()
-                    plt.savefig(os.path.join(occlusion_dir, f"{c_name}_occlusion_map.png"), dpi=300)
-                    plt.close()
-                
-                print(f"✓ Resultados de oclusión guardados en {occlusion_dir}")
-                
-            except Exception as e:
-                print(f"⚠ Error al procesar mapas de oclusión: {e}")
-                import traceback
-                traceback.print_exc()
-                
-    print("\n" + "="*80)
-    print(f"ANÁLISIS COMPLETO: {len(selected_samples)} muestras procesadas")
-    print("="*80)
-    print(f"Resultados guardados en: {results_base_dir}")
 
-def main():
-    """Función principal que ejecuta el análisis de interpretabilidad."""
-    # Parsear argumentos
-    args = parse_arguments()
-    
-    # Configuración visual y de dispositivo
-    plt.style.use('dark_background')
-    plt.rcParams['figure.figsize'] = (12, 8)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Utilizando dispositivo: {device}")
-    
-    # Determinar rutas base
-    project_root = args.project_root
-    
-    # Comprobar y configurar rutas en sys.path
-    sys.path.append(project_root)
-    sys.path.append(os.path.join(project_root, "train/deep_learning/1_modeling"))
-    
-    # Directorios base
-    model_base_dir = os.path.join(project_root, "artifacts/deep_learning/gland/models/")
-    csv_path = os.path.join(project_root, "artifacts/data.csv")
-    
-    # Comprobar existencia de directorios y archivos clave
-    if not os.path.exists(model_base_dir):
-        print(f"⚠ Directorio de modelos no encontrado: {model_base_dir}")
-        print("Asegúrate de que la ruta del proyecto sea correcta o proporciona --project-root")
-        return
-    
-    if not os.path.exists(csv_path):
-        print(f"⚠ Archivo CSV no encontrado: {csv_path}")
-        return
-    
-    # Directorio del modelo específico
-    model_dir = os.path.join(model_base_dir, args.model_type)
-    if not os.path.exists(model_dir):
-        print(f"⚠ Directorio de modelo específico no encontrado: {model_dir}")
-        print(f"Modelos disponibles:")
-        for dir in glob.glob(os.path.join(model_base_dir, "base-*")):
-            print(f" - {os.path.basename(dir)}")
-        return
-    
-    # Crear directorio de resultados
-    model_results_dir = os.path.join(args.output_dir, args.model_type)
-    os.makedirs(model_results_dir, exist_ok=True)
-    print(f"Los resultados se guardarán en: {model_results_dir}")
-    
-    # Directorios para mapas de oclusión
-    occlusion_dir = os.path.join(model_results_dir, "OcclusionSensitivity")
-    maps_dir = os.path.join(occlusion_dir, "individual_maps")  # Subcarpeta para mapas individuales
-    
-    # Cargar modelo y datos de test
-    print("Cargando modelo y datos de test...")
-    model, test_dataloader, split_used = load_model_and_test_data(
-        model_dir=model_dir, 
-        csv_path=csv_path, 
-        split_to_use=args.split,
-        project_root=project_root
-    )
-    print(f"Modelo cargado. Usando split {split_used} como conjunto de test.")
-    print(f"Conjunto de test: {len(test_dataloader)} muestras")
-    
-    # Calcular mapas de sensibilidad de oclusión si se requieren y no existen
-    occlusion_maps_available = False
-    if not args.skip_occlusion:
-        # Verificar si ya existen los mapas necesarios
-        if os.path.exists(os.path.join(occlusion_dir, "aggregated_heatmaps.pth")) and os.path.exists(maps_dir):
-            individual_maps = glob.glob(os.path.join(maps_dir, "class*_*.*"))
-            if len(individual_maps) > 0:
-                occlusion_maps_available = True
-                print(f"✓ Mapas de oclusión encontrados: {len(individual_maps)} mapas individuales")
-                print(f"✓ Mapa agregado encontrado en {os.path.join(occlusion_dir, 'aggregated_heatmaps.pth')}")
-        
-        # Si no existen, calcularlos
-        if not occlusion_maps_available:
-            calculate_occlusion_sensitivity(
-                model=model, 
-                test_dataloader=test_dataloader, 
-                maps_dir=maps_dir,
-                occlusion_dir=occlusion_dir
-            )
-            occlusion_maps_available = True
+                _save_metadata(idx, img, filename, true_c, pred_c, probs, dir_path)
+
+                selected_info.append({"idx": idx, "true_class": true_c, "dir": dir_path})
+
+                if verbose:
+                    print(f"✓ ({sample_counter}/{max_samples}) idx={idx} class={true_c}")
+
+            except Exception as e:
+                if verbose:
+                    print(f"⚠ No se pudo procesar idx={idx}: {e}")
+
+    if sample_counter >= max_samples:
+        return selected_info
+
+    # =====================================================================
+    # (1) CRITERIO «correct_class1» con ISUP
+    # =====================================================================
+    if criteria == "correct_class1" and csv_path:
+        if verbose:
+            print("[Selección] csPCa correctos por ISUP (desc)")
+
+        try:
+            isup_data = pd.read_csv(csv_path)
+            if verbose:
+                print(f"✓ CSV '{csv_path}' cargado ({len(isup_data)} filas)")
+        except Exception as e:
+            print(f"⚠ No se pudo leer el CSV: {e}")
+            isup_data = pd.DataFrame()
+
+        for isup_target in [5, 4, 3, 2, 1]:
+            if sample_counter >= max_samples:
+                break
+            if verbose:
+                print(f"\nBuscando ISUP = {isup_target} …")
+
+            indices = list(range(len(dataloader.dataset)))
+            random.shuffle(indices)
+            for idx in indices:
+                if sample_counter >= max_samples:
+                    break
+                if idx in already_selected:
+                    continue
+                try:
+                    sample = dataloader.dataset[idx]
+                    img    = sample["image"].to(device)
+                    label  = sample["label"]
+                    true_c = int(label.argmax())
+                    if true_c != 1:
+                        continue
+
+                    try:
+                        filename = os.path.basename(img.meta["filename_or_obj"])
+                    except Exception:
+                        filename = f"sample_{idx}.nii.gz"
+                    parts = filename.split("_")
+                    patient_id = int(parts[0])
+                    study_id   = int(parts[1].split(".")[0])
+
+                    row = isup_data[
+                        (isup_data.patient_id == patient_id) &
+                        (isup_data.study_id   == study_id)
+                    ]
+                    if row.empty or int(row.iloc[0]["case_ISUP"]) != isup_target:
+                        continue
+
+                    with torch.no_grad():
+                        probs = torch.softmax(model(img.unsqueeze(0)), dim=1)[0].cpu()
+                    pred_c = int(probs.argmax())
+                    if pred_c != 1:
+                        continue
+
+                    sample_counter += 1
+                    already_selected.add(idx)
+
+                    dir_name = f"{criteria}_sample{sample_counter}_idx{idx}_class{true_c}"
+                    dir_path = os.path.join(model_results_dir, dir_name)
+                    os.makedirs(dir_path, exist_ok=True)
+
+                    _save_metadata(idx, img, filename, true_c, pred_c, probs, dir_path)
+
+                    selected_info.append({"idx": idx, "true_class": true_c, "dir": dir_path})
+
+                    if verbose:
+                        print(f"✓ ({sample_counter}/{max_samples}) idx={idx} "
+                              f"ISUP={isup_target} conf={probs[1]:.4f}")
+
+                except Exception:
+                    continue
+
+        if sample_counter >= max_samples:
+            return selected_info
+
+    # =====================================================================
+    # (2) MODOS ALEATORIOS
+    # =====================================================================
+    if verbose:
+        print(f"[Selección] modo aleatorio · criterio = '{criteria}'")
+
+    tried = 0
+    while sample_counter < max_samples and tried < max_attempts:
+        idx = random.randrange(len(dataloader.dataset))
+        if idx in already_selected:
+            continue
+        tried += 1
+
+        sample = dataloader.dataset[idx]
+        img    = sample["image"].to(device)
+        label  = sample["label"]
+        true_c = int(label.argmax())
+
+        with torch.no_grad():
+            probs = torch.softmax(model(img.unsqueeze(0)), dim=1)[0].cpu()
+        pred_c = int(probs.argmax())
+        conf   = float(probs[pred_c])
+
+        if criteria == "correct_class0" and (pred_c != 0 or true_c != 0):
+            continue
+        if criteria == "incorrect" and pred_c == true_c:
+            continue
+        if criteria == "high_confidence" and conf <= 0.9:
+            continue
+
+        sample_counter += 1
+        already_selected.add(idx)
+
+        dir_name = f"{criteria}_sample{sample_counter}_idx{idx}_class{true_c}"
+        dir_path = os.path.join(model_results_dir, dir_name)
+        os.makedirs(dir_path, exist_ok=True)
+
+        try:
+            filename = os.path.basename(img.meta["filename_or_obj"])
+        except Exception:
+            filename = f"sample_{idx}"
+
+        _save_metadata(idx, img, filename, true_c, pred_c, probs, dir_path)
+
+        selected_info.append({"idx": idx, "true_class": true_c, "dir": dir_path})
+
+        if verbose:
+            print(f"✓ ({sample_counter}/{max_samples}) idx={idx} "
+                  f"real={true_c} pred={pred_c} conf={conf:.4f}")
+
+    if sample_counter < max_samples and verbose:
+        print(f"⚠ Sólo se seleccionaron {sample_counter}/{max_samples} muestras.")
+
+    return selected_info
+
+def get_bounding_box(mask: torch.Tensor, margin: int = 0):
+    """
+    Devuelve (slice_z, slice_y, slice_x) que engloban los voxels > 0 de `mask`,
+    extendidas `margin` voxels por cada lado.
+
+    mask  : (C, Z, Y, X)  o  (Z, Y, X)  |   se asume que ya está en el dispositivo correcto
+    margin: voxels extra de cada lado (int ≥ 0)
+    """
+    # Quitar canal si viene como (1, Z, Y, X)
+    mask_ = mask[0] if (mask.ndim == 4 and mask.shape[0] == 1) else mask
+
+    nz = torch.nonzero(mask_, as_tuple=False)
+
+    if nz.numel() == 0:                      # máscara vacía → caja = volumen completo
+        z0 = y0 = x0 = 0
+        z1, y1, x1 = mask_.shape
     else:
-        print("Omitiendo cálculo de mapas de oclusión (--skip-occlusion)")
-        
-    # Aplicar interpretabilidad comprehensiva
-    comprehensive_model_interpretation(
+        min_idx = nz.min(0).values - margin
+        max_idx = nz.max(0).values + 1 + margin
+
+        # tensor con las dimensiones, PERO en el mismo dispositivo
+        dims = torch.tensor(mask_.shape, device=mask_.device)
+
+        min_idx = min_idx.clamp(min=0)
+        max_idx = max_idx.clamp_max(dims)
+
+        z0, y0, x0 = min_idx.tolist()
+        z1, y1, x1 = max_idx.tolist()
+
+    return slice(z0, z1), slice(y0, y1), slice(x0, x1)
+
+def guardar_imagenes_full_y_roi(
+    dataloader,
+    selected_info,
+    margin: int = 20
+):
+    """
+    Para cada elemento de selected_info guarda:
+      <dir>/images/roi/T2w.png  … ADC.png  … DWI.png
+      <dir>/images/original/T2w.png  … ADC.png  … DWI.png
+    usando un crop basado en la bounding box de la glándula, más un margen.
+    """
+    for info in selected_info:
+        idx      = info["idx"]
+        dir_base = info["dir"]
+
+        try:
+            sample    = dataloader.dataset[idx]
+            img_roi   = sample['image'].to(device)        # ROI (próstata)
+            img_full  = sample['image_full'].to(device)   # Imagen completa
+            mask      = sample['mask'].to(device)         # Máscara ya redimensionada
+
+            # Asegurar canal: (1, Z, Y, X)
+            if mask.ndim == 3:
+                mask = mask.unsqueeze(0)
+
+            bbox_slices = get_bounding_box(mask, margin=margin)
+
+            # Crop ROI, full y máscara según bbox
+            img_roi_crop  = img_roi[:, bbox_slices[0], bbox_slices[1], bbox_slices[2]]
+            img_full_crop = img_full[:, bbox_slices[0], bbox_slices[1], bbox_slices[2]]
+
+            # Directorios de salida
+            dir_roi  = os.path.join(dir_base, "original_images", "gland")
+            dir_full = os.path.join(dir_base, "original_images", "full")
+            os.makedirs(dir_roi,  exist_ok=True)
+            os.makedirs(dir_full, exist_ok=True)
+
+            # --- 1. GUARDAR ROI ---
+            for ch, name in enumerate(["T2w", "ADC", "DWI"]):
+                plt.figure()
+                monai.visualize.matshow3d(
+                    volume=img_roi_crop.cpu()[ch:ch+1],
+                    frame_dim=-1, channel_dim=0, every_n=2,
+                    margin=6, show=False, cmap='gray'
+                )
+                plt.savefig(os.path.join(dir_roi, f"{name}.png"), dpi=500)
+                plt.close()
+
+            # --- 2. GUARDAR ORIGINAL ---
+            for ch, name in enumerate(["T2w", "ADC", "DWI"]):
+                plt.figure()
+                monai.visualize.matshow3d(
+                    volume=img_full_crop.cpu()[ch:ch+1],
+                    frame_dim=-1, channel_dim=0, every_n=2,
+                    margin=6, show=False, cmap='gray'
+                )
+                plt.savefig(os.path.join(dir_full, f"{name}.png"), dpi=500)
+                plt.close()
+
+        except Exception as e:
+            print(f"Error al procesar índice {idx}: {e}")
+            import traceback; traceback.print_exc()
+
+def generar_gradcam_gbp(
+    model,
+    dataloader,
+    selected_info,
+    margin = 20,
+    target_layer = "features.norm5",
+    fc_layer = "class_layers.out",
+):
+    """
+    Genera y guarda mapas Grad-CAM, Guided Backprop y su combinación
+    (CAM × GBP) + mezcla con la imagen ADC, recortados a la ROI de la próstata
+    con un margen adicional.
+
+    ▸ Para cada elemento de `selected_info` (dict con "idx" y "dir") crea:
+          <dir>/images/gradcam/gbp.png
+          <dir>/images/gradcam/cam.png
+          <dir>/images/gradcam/result.png
+          <dir>/images/gradcam/blended.png
+    ▸ Requiere que exista la función `get_bounding_box(mask, margin)`.
+    """
+    # inicializadores MONAI
+    cam = monai.visualize.class_activation_maps.CAM(
+        nn_module=model, target_layers=target_layer, fc_layers=fc_layer
+    )
+    gbp = monai.visualize.gradient_based.GuidedBackpropSmoothGrad(model, n_samples=50)
+
+    for info in selected_info:
+        idx      = info["idx"]
+        dir_base = info["dir"]
+
+        try:
+            # ----------------------- datos y predicción -----------------------
+            sample   = dataloader.dataset[idx]
+            img      = sample["image"].to(device)          # (C, Z, Y, X) – ROI original
+            mask     = sample["mask"].to(device)           # (1, Z, Y, X) o (Z, Y, X)
+            label    = sample["label"].to(device)
+
+            pred = torch.nn.functional.softmax(model(img.unsqueeze(0)), dim=1)
+            pred_label  = pred.argmax().item()
+            true_label  = label.argmax().item() if label.numel() > 1 else int(label)
+
+            if pred_label != true_label:
+                continue                                   # omitimos los fallos
+
+            # ------------------------- Grad-CAM & GBP -------------------------
+            cam_result = cam(x=img.unsqueeze(0)).squeeze(0).cpu()        # (C, Z, Y, X)
+            gbp_result = gbp(x=img.unsqueeze(0)).squeeze(0).cpu()
+
+            # normalización sencilla [0–255] y combinación
+            gbp_result = 255 * (gbp_result - gbp_result.min()) / (gbp_result.max() - gbp_result.min())
+            cam_result = 255 * (cam_result - cam_result.min()) / (cam_result.max() - cam_result.min())
+            result     = (cam_result * gbp_result)
+            result     = (result - result.min()) / (result.max() - result.min())
+
+            # mezcla (ADC + result)
+            blended = monai.visualize.utils.blend_images(
+                255 * img.cpu()[1:2], result[1:2], alpha=0.2, transparent_background=True
+            )
+
+            # -------------------- bounding-box de la próstata -----------------
+            if mask.ndim == 3:
+                mask = mask.unsqueeze(0)
+            bbox_slices = get_bounding_box(mask, margin=margin)
+
+            # recortes a la ROI
+            cam_crop     = cam_result[:,  bbox_slices[0], bbox_slices[1], bbox_slices[2]]
+            gbp_crop     = gbp_result[:,  bbox_slices[0], bbox_slices[1], bbox_slices[2]]
+            result_crop  = result[:,      bbox_slices[0], bbox_slices[1], bbox_slices[2]]
+            blended_crop = blended[:,     bbox_slices[0], bbox_slices[1], bbox_slices[2]]
+
+            # -------------------------- guardado ------------------------------
+            gradcam_dir = os.path.join(dir_base, "GradCAM")
+            os.makedirs(gradcam_dir, exist_ok=True)
+
+            # GBP (ADC)
+            plt.figure()
+            monai.visualize.matshow3d(
+                volume=gbp_crop[1:2], frame_dim=-1, channel_dim=0,
+                every_n=2, margin=6, show=False
+            )
+            plt.savefig(os.path.join(gradcam_dir, "gbp.png"), dpi=500)
+            plt.close()
+
+            # CAM
+            plt.figure()
+            monai.visualize.matshow3d(
+                volume=cam_crop, frame_dim=-1, channel_dim=0,
+                every_n=2, margin=6, show=False
+            )
+            plt.savefig(os.path.join(gradcam_dir, "cam.png"), dpi=500)
+            plt.close()
+
+            # RESULT = CAM × GBP
+            plt.figure()
+            monai.visualize.matshow3d(
+                volume=result_crop, frame_dim=-1, channel_dim=0,
+                every_n=2, margin=6, fill_value=255, show=False, cmap="gray"
+            )
+            plt.savefig(os.path.join(gradcam_dir, "result.png"), dpi=500)
+            plt.close()
+
+            # BLENDED (ADC + mapa fusionado)
+            plt.figure()
+            monai.visualize.matshow3d(
+                volume=blended_crop, frame_dim=-1, channel_dim=0,
+                every_n=2, margin=6, show=False
+            )
+            plt.savefig(os.path.join(gradcam_dir, "blended.png"), dpi=500)
+            plt.close()
+
+        except Exception as e:
+            print(f"[GradCAM] Error en índice {idx}: {e}")
+            import traceback; traceback.print_exc()
+
+def generar_aggregated_maps(
+    dataloader,
+    selected_info,
+    maps,
+    margin: int = 20,          
+    threshold: float = 0.8,
+    channel_names=("T2w", "ADC", "DWI"),
+):
+    """
+    Para cada caso genera dos carpetas:
+
+        <dir>/AggregatedMaps/gland/
+            T2w_map_<clase>.png   (ROI)
+            ADC_map_<clase>.png
+            DWI_map_<clase>.png
+
+        <dir>/AggregatedMaps/full/
+            T2w_map_<clase>.png   (imagen completa + overlay)
+            ADC_map_<clase>.png
+            DWI_map_<clase>.png
+
+    – El overlay es el mapa agregado de la **clase real**,
+      umbralizado (> threshold) y normalizado 0-255.
+    – El blend se hace canal-a-canal con `monai.visualize.utils.blend_images`.
+    """
+
+    # Normalizar una vez los mapas globales
+    maps_norm = {k: (v - v.min()) / (v.max() - v.min()) for k, v in maps.items()}
+
+    for info in selected_info:
+        idx, dir_base = info["idx"], info["dir"]
+
+        try:
+            # ──────────── cargar muestra ────────────
+            sample     = dataloader.dataset[idx]
+            img_roi    = sample["image"].to(device)         # (C, Z, Y, X)
+            img_full   = sample["image_full"].to(device)    # (C, Z, Y, X)
+            mask       = sample["mask"].to(device)          # (1, Z, Y, X) o (Z, Y, X)
+            label      = sample["label"].to(device)
+
+            true_class = label.argmax().item() if label.numel() > 1 else int(label)
+            class_key  = "no_csPCa" if true_class == 0 else "csPCa"
+            if class_key not in maps_norm:
+                print(f"[AggMaps] mapa '{class_key}' no encontrado (idx {idx})")
+                continue
+
+            map_global = maps_norm[class_key]               # (C, Z, Y, X)
+
+            # ──────────── bounding-box ROI ────────────
+            if mask.ndim == 3:
+                mask = mask.unsqueeze(0)
+            z_s, y_s, x_s = get_bounding_box(mask, margin=margin)
+
+            img_crop = img_roi.cpu()[:, z_s, y_s, x_s]      # ROI (C, Z, Y, X)
+            map_crop = map_global[:, z_s, y_s, x_s]
+
+            # umbralizar
+            map_thr = torch.where(map_crop > threshold, map_crop, torch.zeros_like(map_crop))
+
+            # ──────────── carpetas de salida ────────────
+            dir_gland = os.path.join(dir_base, "AggregatedMaps", "gland")
+            dir_full  = os.path.join(dir_base, "AggregatedMaps", "full")
+            os.makedirs(dir_gland, exist_ok=True)
+            os.makedirs(dir_full,  exist_ok=True)
+
+            # ──────────── helper para guardar ────────────
+            def _save(vol, path, cmap=None):
+                plt.figure()
+                monai.visualize.matshow3d(
+                    volume=vol, frame_dim=-1, channel_dim=0,
+                    every_n=2, margin=6, show=False,
+                    cmap=cmap
+                )
+                plt.savefig(path, dpi=500)
+                plt.close()
+
+            # ──────────── guardar ROI (gland) ────────────
+            for c_idx, c_name in enumerate(channel_names):
+                blended_roi = monai.visualize.utils.blend_images(
+                    255 * img_crop[c_idx:c_idx+1],
+                    255 * map_thr[c_idx:c_idx+1],
+                    alpha=0.3, transparent_background=True
+                )
+                _save(blended_roi,
+                      os.path.join(dir_gland, f"{c_name}_map_{class_key}.png"))
+
+            # ──────────── preparar mapas FULL ────────────
+            adc_full = 255 * img_full.cpu()                 # base completa (C, Z, Y, X)
+
+            # tensor vacío para cada canal y pegamos el overlay en la ROI
+            overlay_full = torch.zeros_like(adc_full)       #  ←  antes era torch.zeros_like(map_thr)
+            overlay_full[:, z_s, y_s, x_s] = 255 * map_thr  # coloca la ROI en su sitio
+
+            # ──────────── guardar FULL ────────────
+            for c_idx, c_name in enumerate(channel_names):
+                blended_full = monai.visualize.utils.blend_images(
+                    adc_full[c_idx:c_idx+1],
+                    overlay_full[c_idx:c_idx+1],
+                    alpha=0.3, transparent_background=True
+                )
+                _save(blended_full,
+                      os.path.join(dir_full, f"{c_name}_map_{class_key}.png"))
+
+        except Exception as e:
+            print(f"[AggMaps] Error en índice {idx}: {e}")
+            import traceback; traceback.print_exc()
+
+def generar_occlusion_maps(
+    dataloader,
+    selected_info,
+    sensitivity_maps_dir,               # carpeta donde vive cada *.pth
+    margin: int = 20,
+    threshold: float = 0.8,
+    channel_names=("T2w", "ADC", "DWI"),
+):
+    """
+    Para cada caso ->  dos carpetas y 3 PNG en cada una:
+
+        <dir>/OcclusionSensitivity/gland/
+            T2w_occlusion.png   ADC_occlusion.png   DWI_occlusion.png   (ROI)
+
+        <dir>/OcclusionSensitivity/full/
+            T2w_occlusion.png   ADC_occlusion.png   DWI_occlusion.png   (imagen completa)
+
+    El mapa de oclusión se normaliza, se umbraliza (> threshold) y se mezcla
+    con el canal correspondiente de la imagen (alpha = 0.2).
+    """
+
+    # ---------- helper para guardar con matshow3d ----------
+    def _save(vol, path):
+        plt.figure()
+        monai.visualize.matshow3d(
+            volume=vol, frame_dim=-1, channel_dim=0,
+            every_n=2, margin=6, show=False
+        )
+        plt.savefig(path, dpi=500)
+        plt.close()
+
+    for info in selected_info:
+        idx, dir_base = info["idx"], info["dir"]
+
+        try:
+            # ---------------- datos de la muestra ----------------
+            sample   = dataloader.dataset[idx]
+            img_roi  = sample["image"].to(device)        # (C, Z, Y, X)
+            img_full = sample["image_full"].to(device)   # (C, Z, Y, X)
+            mask     = sample["mask"].to(device)
+            label    = sample["label"].to(device)
+
+            true_class = label.argmax().item() if label.numel() > 1 else int(label)
+            class_str  = "no_csPCa" if true_class == 0 else "csPCa"
+
+            # nombre de archivo original que se usó al crear los mapas
+            filename = os.path.basename(img_roi.meta["filename_or_obj"])
+            map_path = os.path.join(sensitivity_maps_dir, f"class{true_class}_{filename}")
+            if not os.path.exists(map_path):
+                print(f"[OccMaps] Mapa no encontrado → {map_path}")
+                continue
+
+            heatmap = torch.load(map_path).cpu()                        # (1, Z, Y, X) o (Z, Y, X)
+            heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
+
+            # --------------- ROI bbox (+ margen) ------------------
+            if mask.ndim == 3:
+                mask = mask.unsqueeze(0)
+            z_s, y_s, x_s = get_bounding_box(mask, margin=margin)
+
+            img_crop = img_roi.cpu()[:, z_s, y_s, x_s]                  # (C, Z, Y, X)
+            hm_crop  = heatmap[:, z_s, y_s, x_s] if heatmap.ndim == 4 else heatmap[z_s, y_s, x_s]
+
+            # umbral
+            hm_thr   = torch.where(hm_crop > threshold, hm_crop, torch.zeros_like(hm_crop))
+
+            # --------------- carpetas de salida -------------------
+            dir_gland = os.path.join(dir_base, "OcclusionSensitivity", "gland")
+            dir_full  = os.path.join(dir_base, "OcclusionSensitivity", "full")
+            os.makedirs(dir_gland, exist_ok=True)
+            os.makedirs(dir_full,  exist_ok=True)
+
+            # --------------- guardar ROI --------------------------
+            for c_idx, c_name in enumerate(channel_names):
+                blended_roi = monai.visualize.utils.blend_images(
+                    255 * img_crop[c_idx:c_idx+1],
+                    255 * hm_thr if heatmap.ndim == 3 else 255 * hm_thr,  # hm_thr ya (Z,Y,X)
+                    alpha=0.2, transparent_background=True
+                )
+                _save(blended_roi, os.path.join(dir_gland, f"{c_name}_occlusion.png"))
+
+            # --------------- preparar FULL ------------------------
+            adc_full     = 255 * img_full.cpu()               # (C, Z, Y, X)
+            overlay_full = torch.zeros_like(adc_full)         # (C, Z, Y, X)
+            
+            # quitar eje-extra si existe → hm_src queda (Zc, Yc, Xc)
+            hm_src = hm_thr.squeeze(0) if hm_thr.ndim == 4 else hm_thr
+            
+            # colocar ROI en su sitio; broadcast al primer eje (C)
+            overlay_full[:, z_s, y_s, x_s] = 255 * hm_src    
+            
+            # ---------- guardar FULL ----------
+            for c_idx, c_name in enumerate(channel_names):
+                blended_full = monai.visualize.utils.blend_images(
+                    adc_full[c_idx:c_idx+1],
+                    overlay_full[c_idx:c_idx+1],
+                    alpha=0.2,
+                    transparent_background=True
+                )
+                _save(blended_full, os.path.join(dir_full, f"{c_name}_occlusion.png"))
+                
+            print(f"✓ Occlusion maps guardados en {os.path.join(dir_base,'OcclusionSensitivity')}")
+
+        except Exception as e:
+            print(f"[OccMaps] Error en índice {idx}: {e}")
+            import traceback; traceback.print_exc()
+
+def ejecutar_todos_los_analisis(
+    model,
+    dataloader,
+    selected_info,
+    maps=None,                     # para aggregated
+    sensitivity_maps_dir=None,     # para oclusión
+    margin=20,
+    threshold=0.8,
+    channel_names=("T2w", "ADC", "DWI"),
+    skip_gradcam=False,
+    skip_occlusion=False,
+    skip_aggregated=False,
+):
+    # 1. GradCAM + GBP
+    if not skip_gradcam:
+        print("\n--- Generando GradCAM y GBP ---")
+        generar_gradcam_gbp(
+            model=model,
+            dataloader=dataloader,
+            selected_info=selected_info,
+            margin=margin
+        )
+    else:
+        print("Saltando GradCAM y GBP...")
+
+    # 2. Occlusion Sensitivity (mapas individuales y agregados)
+    if not skip_occlusion:
+        print("\n--- Generando mapas de oclusión ---")
+        assert sensitivity_maps_dir is not None, "Se requiere sensitivity_maps_dir para oclusión"
+        generar_occlusion_maps(
+            dataloader=dataloader,
+            selected_info=selected_info,
+            sensitivity_maps_dir=sensitivity_maps_dir,
+            margin=margin,
+            threshold=threshold,
+            channel_names=channel_names
+        )
+    else:
+        print("Saltando mapas de oclusión...")
+
+    # 3. Aggregated maps
+    if not skip_aggregated:
+        print("\n--- Generando mapas agregados ---")
+        assert maps is not None, "Se requiere el objeto 'maps' para mapas agregados"
+        generar_aggregated_maps(
+            dataloader=dataloader,
+            selected_info=selected_info,
+            maps=maps,
+            margin=margin,
+            threshold=threshold,
+            channel_names=channel_names
+        )
+    else:
+        print("Saltando mapas agregados...")
+
+    print("\n✓ Análisis completo para todas las muestras seleccionadas.")
+
+
+if __name__ == "__main__":
+    args = parse_arguments()
+
+    # 1. Define paths relevantes según tu proyecto
+    model_base_dir = os.path.join(args.project_root, "artifacts/deep_learning/gland/models/", args.model_type)
+    csv_path = os.path.join(args.project_root, "artifacts", "data.csv")
+    model_results_dir = os.path.join(args.output_dir, args.model_type)
+    occlusion_dir = os.path.join(model_results_dir, "OcclusionSensitivity")
+    maps_dir = os.path.join(model_results_dir, "OcclusionSensitivity", "individual_maps")
+    sensitivity_maps_dir = maps_dir
+
+    # 2. Carga el modelo y el dataloader
+    model, test_dataloader, split_to_use = load_model_and_test_data(
+        model_base_dir,
+        csv_path,
+        split_to_use=args.split,
+        project_root=args.project_root
+    )
+
+    # 3. Calcula (si es necesario) los mapas de oclusión y carga mapas agregados
+    calculate_occlusion_sensitivity(model, test_dataloader, maps_dir, occlusion_dir)
+    agg_maps_path = os.path.join(occlusion_dir, "aggregated_heatmaps.pth")
+    maps = torch.load(agg_maps_path) if os.path.exists(agg_maps_path) else None
+
+    # 4. Selección de muestras
+    selected_info = seleccionar_indices_muestras(
         dataloader=test_dataloader,
         model=model,
         model_results_dir=model_results_dir,
         csv_path=csv_path,
         criteria=args.criteria,
+        preselected_indices=args.preselected_indices,
         max_samples=args.max_samples,
         max_attempts=args.max_attempts,
-        use_gradcam=not args.skip_gradcam,
-        use_occlusion=not args.skip_occlusion,
-        use_aggregated_maps=not args.skip_aggregated,
-        maps_dir=os.path.join(occlusion_dir, "aggregated_heatmaps.pth") if not args.skip_aggregated else None,
-        sensitivity_maps_dir=maps_dir if not args.skip_occlusion else None
+        verbose=True
     )
-    
-    print("\nAnálisis de interpretabilidad completado!")
-    print(f"Todos los resultados están disponibles en: {model_results_dir}")
+    if not selected_info:
+        print("No se han seleccionado muestras para análisis.")
+        sys.exit(1)
 
-if __name__ == "__main__":
-    main()
+    # 5. Guardar imágenes base (opcional, pon aquí tu llamada si quieres)
+    guardar_imagenes_full_y_roi(
+        dataloader=test_dataloader,
+        selected_info=selected_info,
+        margin=20
+    )
+
+    # 6. Ejecutar los análisis principales (sólo análisis)
+    ejecutar_todos_los_analisis(
+        model=model,
+        dataloader=test_dataloader,
+        selected_info=selected_info,
+        maps=maps,
+        sensitivity_maps_dir=sensitivity_maps_dir,
+        margin=20,
+        threshold=0.8,
+        channel_names=("T2w", "ADC", "DWI"),
+        skip_gradcam=args.skip_gradcam,
+        skip_occlusion=args.skip_occlusion,
+        skip_aggregated=args.skip_aggregated
+    )

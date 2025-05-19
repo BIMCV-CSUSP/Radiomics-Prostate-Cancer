@@ -53,20 +53,20 @@ setting:
 # for possible values
 imageType:
   Original: {} # for dictionaries / mappings, None values are not allowed, '{}' is interpreted as an empty dictionary
-  # LoG: {'sigma': [0.6, 2, 3]}
-  # Wavelet: {'level': 2} #
-  # Square: {}
-  # SquareRoot: {}
-  # Logarithm: {}
-  # Exponential: {}
+  LoG: {'sigma': [0.6, 2, 3]}
+  Wavelet: {'level': 2} #
+  Square: {}
+  SquareRoot: {}
+  Logarithm: {}
+  Exponential: {}
 
 # Featureclasses, from which features must be calculated. If a featureclass is not mentioned, no features are calculated
 # for that class. Otherwise, the specified features are calculated, or, if none are specified, all are calculated.
 featureClass:
   shape: # for lists none values are allowed, in this case, all features are enabled
-  # firstorder: [] # specifying an empty list has the same effect as specifying nothing.
-  # glcm:
-  # glrlm:
-  # glszm:
-  # ngtdm:
-  # gldm:
+  firstorder: [] # specifying an empty list has the same effect as specifying nothing.
+  glcm:
+  glrlm:
+  glszm:
+  ngtdm:
+  gldm:

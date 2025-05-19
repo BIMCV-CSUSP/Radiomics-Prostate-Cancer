@@ -60,6 +60,568 @@ import joblib
 from scipy.stats import mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 
+
+###########################
+#         SHAP            #
+###########################
+
+def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, report_path, dataset_name="conjunto"):
+    """
+    Realiza análisis SHAP sobre un conjunto de datos.
+    
+    Args:
+        X_data: Datos de características sin procesar
+        y_data: Etiquetas
+        model_clf: Clasificador final
+        preprocessor: Pipeline de preprocesamiento
+        shap_dir: Directorio donde guardar los resultados
+        dataset_name: Nombre del conjunto de datos (para etiquetar)
+    """
+    print(f"\nRealizando análisis SHAP para {dataset_name}...")
+    try:
+        # Aplicar StandardScaler conservando nombres de columnas
+        scaler = preprocessor.steps[0][1]
+        X_scaled = pd.DataFrame(scaler.transform(X_data),
+                            index=X_data.index,
+                            columns=X_data.columns)
+        
+        # Aplicar VarianceThreshold y recuperar columnas seleccionadas
+        vt = preprocessor.steps[1][1]
+        mask = vt.get_support()
+        selected_features = X_data.columns[mask]
+        X_transformed_array = vt.transform(X_scaled.values)
+        X_transformed = pd.DataFrame(X_transformed_array,
+                                    index=X_data.index,
+                                    columns=selected_features)
+        
+        # Seleccionar el explainer adecuado según el tipo de modelo
+        if isinstance(model_clf, (RandomForestClassifier, GradientBoostingClassifier)):
+            # Para modelos basados en árboles
+            explainer = shap.TreeExplainer(model_clf)
+        elif isinstance(model_clf, LogisticRegression):
+            # Para modelos lineales
+            try:
+                explainer = shap.LinearExplainer(model_clf, X_transformed)
+            except Exception:
+                # Si falla, usar KernelExplainer como alternativa
+                background = shap.kmeans(X_transformed, 50)
+                explainer = shap.KernelExplainer(model_clf.predict_proba, background)
+        else:
+            # Para otros modelos (SVM, KNN, NaiveBayes)
+            background = shap.kmeans(X_transformed, 50) # Resumen del dataset para acelerar
+            explainer = shap.KernelExplainer(model_clf.predict_proba, background)
+        
+        # Calcular los valores SHAP
+        shap_values = explainer(X_transformed)
+        joblib.dump(shap_values, os.path.join(shap_dir, 'shap_values.pkl'))
+        
+        # Para clasificación binaria, quedarse con los valores SHAP de la clase positiva
+        if shap_values.values.ndim > 2:
+            shap_values = shap_values[:,:,1]
+        
+        # --------------------------------------------------------------
+        # PARTE 1: TEST ESTADÍSTICO entre valores SHAP y la clase
+        # --------------------------------------------------------------
+        print(f" - Realizando test estadístico (Mann-Whitney U) para {dataset_name} con corrección Holm...")
+        
+        # Construir DataFrame con valores SHAP
+        shap_matrix = pd.DataFrame(
+            shap_values.values,
+            index=X_transformed.index,
+            columns=X_transformed.columns
+        )
+        
+        # Listas para resultados estadísticos
+        features_test = []
+        pvalues_raw = []
+        
+        # Realizar test para cada característica
+        for feat in shap_matrix.columns:
+            # Separar valores SHAP por clase
+            shap_class0 = shap_matrix.loc[y_data == 0, feat]
+            shap_class1 = shap_matrix.loc[y_data == 1, feat]
+            
+            # Test Mann-Whitney U (test no paramétrico para comparar distribuciones)
+            stat, pval = mannwhitneyu(shap_class0, shap_class1, alternative='two-sided')
+            features_test.append(feat)
+            pvalues_raw.append(pval)
+        
+        # Corrección por comparaciones múltiples (método de Holm)
+        alpha = 0.05
+        reject, pvals_corr, _, _ = multipletests(pvalues_raw, alpha=alpha, method='holm')
+        
+        # Generar reporte de resultados
+        lines_output = []
+        lines_output.append("=================================")
+        lines_output.append(f"TEST DE MANN-WHITNEY U (SHAP por feature) con corrección 'Holm' para {dataset_name}")
+        lines_output.append("Comparación: Clase 0 vs Clase 1")
+        lines_output.append(f"alpha = {alpha}")
+        lines_output.append(f"Features totales: {len(features_test)}") 
+        lines_output.append("=================================\n")
+        
+        lines_output.append(f"Resultados por feature (p-value crudo y corregido):")
+        significant_feats = []
+        
+        # Procesar resultados para cada característica
+        for feat, pval_raw, pval_corr, rej_bool in zip(features_test, pvalues_raw, pvals_corr, reject):
+            if rej_bool: # Diferencia significativa (rechazamos H0)
+                result_str = "=> DIFERENCIA SIGNIFICATIVA"
+                significant_feats.append((feat, pval_raw, pval_corr))
+            else:
+                result_str = "=> sin diferencia significativa"
+            
+            lines_output.append(
+                f"    {feat}: p-value crudo={pval_raw:.4e}, p-value corregido={pval_corr:.4e} {result_str}"
+            )
+        # Resumen de características significativas
+        lines_output.append("")
+        lines_output.append(f" Total comparaciones con diferencia significativa: {len(significant_feats)}. Comparaciones:")
+        
+        if not significant_feats:
+            lines_output.append("    No se encontraron diferencias significativas.")
+        else:
+            for feat, pval_raw, pval_corr in significant_feats:
+                lines_output.append(
+                    f"    {feat}: p-value crudo={pval_raw:.4e}, p-value corregido={pval_corr:.4e} => DIFERENCIA SIGNIFICATIVA"
+                )
+        
+        lines_output.append("\n")
+        
+        # Guardar resultados en archivo
+        test_txt_path = os.path.join(shap_dir, "shap_statistical_test.txt")
+        with open(test_txt_path, "w", encoding="utf-8") as f_out:
+            for line in lines_output:
+                f_out.write(line + "\n")
+        
+        print(f"  --> Test estadístico guardado en: {test_txt_path}")
+    
+        # --------------------------------------------------------------
+        # PARTE 2: HEATMAP (clase 0 primero, luego clase 1)
+        # --------------------------------------------------------------
+        print(f" - Generando Heatmap con muestras ordenadas por clase para {dataset_name}...")
+        # Ordenar instancias por clase para visualización
+        idx_class0 = np.where(y_data == 0)[0]
+        idx_class1 = np.where(y_data == 1)[0]
+        
+        # Concatenar índices (primero clase 0, luego clase 1)
+        idx_order = np.concatenate([idx_class0, idx_class1])
+        
+        heatmap_path = os.path.join(shap_dir, "shap_heatmap.png")
+        
+        # Generar heatmap con SHAP, especificando el orden de instancias
+        shap.plots.heatmap(
+            shap_values, 
+            show=False,
+            instance_order=idx_order
+        )
+        
+        fig = plt.gcf()
+        ax = plt.gca()
+        
+        # Añadir línea divisoria entre clases
+        split_position = len(idx_class0)
+        ax.axvline(split_position - 0.5, color='black', linewidth=1, zorder=10)
+        n_total = len(idx_order)
+        mid_class0 = (split_position / 2) / n_total
+        mid_class1 = (split_position + len(idx_class1)/2) / n_total
+        
+        # Añadir etiquetas sobre la parte superior del heatmap
+        ax.text(mid_class0, 1.01, 'Clase 0', ha='center', va='bottom', transform=ax.transAxes)
+        ax.text(mid_class1, 1.01, 'Clase 1', ha='center', va='bottom', transform=ax.transAxes)
+        
+        # Guardar figura
+        fig.set_size_inches(10, 6)
+        plt.tight_layout()
+        plt.savefig(heatmap_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  --> Heatmap reordenado guardado en: {heatmap_path}")
+    
+        # --------------
+        # Beeswarm plot 
+        # --------------
+        shap_fig_path = os.path.join(shap_dir, "shap_beeswarm.png")
+        shap.plots.beeswarm(shap_values, max_display=16, show=False)
+        fig = plt.gcf()
+        fig.set_size_inches(14, 8)
+        plt.subplots_adjust(left=0.4, right=0.95)
+        plt.tight_layout()
+        plt.savefig(shap_fig_path, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        print(f"  --> Beeswarm plot guardado en: {shap_fig_path}")
+    
+        # --------------------------------------------------------------
+        # Scatter plots de las top features
+        # --------------------------------------------------------------
+        # Crear directorio para gráficos individuales
+        scatter_dir = os.path.join(shap_dir, "scatter_plots")
+        os.makedirs(scatter_dir, exist_ok=True)
+        # Identificar las 15 características con mayor impacto (valor SHAP absoluto)
+        mean_abs_shap = np.abs(shap_values.values).mean(axis=0)
+        top_idx = np.argsort(mean_abs_shap)[-15:]
+        top_idx = top_idx[np.argsort(mean_abs_shap[top_idx])[::-1]]
+        top_features_shap = X_transformed.columns[top_idx]
+        
+        for i, feature in enumerate(top_features_shap, start=1):
+            scatter_fig_path = os.path.join(scatter_dir, f"{i:02d}_{feature}.png")
+            shap.plots.scatter(shap_values[:, feature], color=shap_values, show=False)
+            fig = plt.gcf()
+            fig.set_size_inches(10, 6)
+            plt.tight_layout()
+            plt.savefig(scatter_fig_path, dpi=dpi, bbox_inches='tight')
+            plt.close()
+        
+        print(f"  --> Scatter plots de las variables más relevantes guardados en: {scatter_dir}")
+        return True, selected_features, shap_values, top_features_shap
+    
+    except Exception as e:
+        with open(report_path, "a", encoding="utf-8") as f_out:
+            f_out.write(f"=== SHAP Analysis ({dataset_name}) ===\n")
+            f_out.write(" No se pudo generar SHAP (modelo no soportado o error):\n")
+            f_out.write(f"  {repr(e)}\n\n")
+        print(f"Error en SHAP analysis para {dataset_name}:", e)
+        return False, None, None, None
+
+
+###########################
+#         LIME            #
+###########################
+
+def extraer_nombre(feat_str):
+    """
+    Extrae el nombre de característica original de la representación de LIME.
+    LIME puede añadir información adicional como rangos o categorías.
+    """
+    tokens = re.findall(r'[A-Za-z0-9_\.\-]+', feat_str)
+    valid_tokens = [t for t in tokens if re.search('[A-Za-z]', t)]
+    if not valid_tokens:
+        return feat_str.strip()
+    return max(valid_tokens, key=len)
+
+
+def explain_lime_instance(
+    X_data, 
+    index, 
+    y_true, 
+    y_pred, 
+    model_clf, 
+    explainer, 
+    lime_dir, 
+    instance_label="instancia"
+):
+    """
+    Genera y guarda explicación LIME para una instancia específica.
+    
+    Args:
+        X_data: Datos preprocesados
+        index: Índice de la instancia a explicar
+        y_true: Etiquetas reales
+        y_pred: Predicciones del modelo
+        model_clf: Clasificador final
+        explainer: Explainer LIME configurado
+        lime_dir: Directorio para guardar resultados
+        instance_label: Etiqueta para identificar la instancia
+    """
+    
+    # Generar explicación LIME
+    exp = explainer.explain_instance(
+        data_row=X_data[index],
+        predict_fn=model_clf.predict_proba,
+        num_features=10 # Número de características a mostrar
+    )
+    
+    # Rutas para guardar resultados
+    explanation_txt_path = os.path.join(lime_dir, f"lime_explanation_{instance_label}_{index}.txt")
+    fig_path = os.path.join(lime_dir, f"lime_explanation_{instance_label}_{index}.png")
+    
+    # Guardar explicación como texto
+    with open(explanation_txt_path, "w", encoding="utf-8") as f:
+        f.write(f"=== LIME Explanation para {instance_label} (índice: {index}) ===\n\n")
+        f.write(f"Clase real: {y_true[index]}\n")
+        f.write(f"Predicción del modelo: {y_pred[index]}\n")
+        f.write(f"Probabilidades: {model_clf.predict_proba([X_data[index]])}\n\n")
+        f.write("Importancia local de las features:\n")
+        for feat_info in exp.as_list():
+            f.write("  {}: {:.4f}\n".format(feat_info[0], feat_info[1]))
+    
+    # Generar y guardar visualización
+    with plt.style.context("default"):
+        lime_fig = exp.as_pyplot_figure()
+        ax = plt.gca()
+        
+        pos_color = "#0072B2"   
+        neg_color = "#E69F00"   
+    
+        for rect in ax.patches:
+            if rect.get_facecolor() == (0.0, 1.0, 0.0, 1.0): 
+                rect.set_facecolor(pos_color)
+            elif rect.get_facecolor() == (1.0, 0.0, 0.0, 1.0):
+                rect.set_facecolor(neg_color)
+        
+        plt.title(f"LIME Explanation - {instance_label} (index={index})")
+        plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
+        plt.close(lime_fig)
+    
+    print(f"  -> LIME para {instance_label} (índice {index}) guardado en:\n"
+          f"     {explanation_txt_path}\n"
+          f"     {fig_path}")
+
+
+def generate_lime_explanations_for_misclassifications(
+    X_test_lime,
+    y_test,
+    model_clf, 
+    explainer,
+    lime_dir
+):
+    """
+    Genera explicaciones LIME para ejemplos representativos de cada categoría
+    de predicción (Verdaderos Positivos, Verdaderos Negativos, Falsos Positivos, 
+    Falsos Negativos).
+    """
+    y_pred = model_clf.predict(X_test_lime)
+    
+    # Identificar índices para cada categoría
+    # True Negative (TN): real=0, pred=0
+    tn_indices = np.where((y_test == 0) & (y_pred == 0))[0]
+    # True Positive (TP): real=1, pred=1
+    tp_indices = np.where((y_test == 1) & (y_pred == 1))[0]
+    # False Positive (FP): real=0, pred=1
+    fp_indices = np.where((y_test == 0) & (y_pred == 1))[0]
+    # False Negative (FN): real=1, pred=0
+    fn_indices = np.where((y_test == 1) & (y_pred == 0))[0]
+    
+    # Función auxiliar para explicar el primer caso de cada categoría
+    def explain_first_if_any(indices, label):
+        if len(indices) > 0:
+            idx = indices[0] # Tomar el primer ejemplo
+            explain_lime_instance(
+                X_data=X_test_lime,
+                index=idx,
+                y_true=y_test,
+                y_pred=y_pred,
+                model_clf=model_clf,
+                explainer=explainer,
+                lime_dir=lime_dir,
+                instance_label=label
+            )
+        else:
+            print(f"No hay instancias para {label}.")
+    
+    # Generar explicaciones para cada categoría
+    explain_first_if_any(tn_indices, "TN")
+    explain_first_if_any(tp_indices, "TP")
+    explain_first_if_any(fp_indices, "FP")
+    explain_first_if_any(fn_indices, "FN")
+
+
+def perform_lime_analysis(X_data, y_data, model_clf, preprocessor, lime_dir, selected_features, report_path, shap_top_features=None, dataset_name="conjunto"):
+    """
+    Realiza análisis LIME sobre un conjunto de datos.
+    
+    Args:
+        X_data: Datos de características sin procesar
+        y_data: Etiquetas 
+        model_clf: Clasificador final
+        preprocessor: Pipeline de preprocesamiento
+        lime_dir: Directorio donde guardar los resultados
+        selected_features: Lista de características seleccionadas
+        shap_top_features: Top features según SHAP (opcional, para ordenamiento consistente)
+        dataset_name: Nombre del conjunto de datos (para etiquetar)
+    """
+    print(f"\nRealizando análisis LIME para {dataset_name}...")
+    try:
+        # Preprocesar datos
+        X_lime = preprocessor.transform(X_data)
+        
+        # Configurar explainer LIME
+        explainer_lime = LimeTabularExplainer(
+            training_data=X_lime,
+            feature_names=selected_features,
+            class_names=["0", "1"],
+            discretize_continuous=True,
+            random_state=42
+        )
+        
+        # Recopilar resultados de LIME para todas las instancias
+        resultados = []
+        
+        # Iterar en múltiples instancias para análisis global
+        for i in range(len(X_lime)):
+            exp = explainer_lime.explain_instance(
+                data_row=X_lime[i],
+                predict_fn=model_clf.predict_proba
+            )
+            # Obtener lista de importancias para clase positiva
+            lime_list = exp.as_list(label=1)  
+            
+            # Procesar cada característica y su importancia
+            for (feat_str, peso) in lime_list:
+                feature_name = extraer_nombre(feat_str) 
+                col_idx = selected_features.get_loc(feature_name)
+                valor_feature = X_lime[i, col_idx]
+                
+                # Almacenar resultados
+                resultados.append({
+                    'instancia': i,
+                    'feature': feature_name,
+                    'peso': peso,
+                    'valor_feature': valor_feature
+                })
+        
+        df_lime = pd.DataFrame(resultados)
+        df_lime['abs_peso'] = df_lime['peso'].abs()
+        
+        # Seleccionar las 15 características con mayor peso absoluto promedio
+        top_features = (
+            df_lime.groupby('feature')['abs_peso']
+            .mean()
+            .sort_values(ascending=False)
+            .head(15)
+            .index
+            .tolist()
+        )
+        
+        # Filtrar DataFrame para mostrar solo las características principales
+        df_lime_top15 = df_lime[df_lime['feature'].isin(top_features)].copy()
+        
+        # Normalización min-max para cada característica
+        df_lime_top15['valor_min'] = df_lime_top15.groupby('feature')['valor_feature'].transform('min')
+        df_lime_top15['valor_max'] = df_lime_top15.groupby('feature')['valor_feature'].transform('max')
+        
+        # Normalización min-max (escala 0-1)
+        df_lime_top15['valor_feature_norm'] = (
+            (df_lime_top15['valor_feature'] - df_lime_top15['valor_min'])
+            / (df_lime_top15['valor_max'] - df_lime_top15['valor_min'])
+        )
+        
+        # Normalización logarítmica
+        # Asegurar valores positivos
+        df_lime_top15['valor_feature_shifted'] = df_lime_top15.groupby('feature')['valor_feature'].transform(
+            lambda x: x - x.min() + 1e-10 if x.min() <= 0 else x
+        )
+        # Aplicar transformación logarítmica
+        df_lime_top15['valor_feature_log'] = np.log1p(df_lime_top15['valor_feature_shifted'])
+        # Normalizar los valores logarítmicos
+        df_lime_top15['valor_feature_log_min'] = df_lime_top15.groupby('feature')['valor_feature_log'].transform('min')
+        df_lime_top15['valor_feature_log_max'] = df_lime_top15.groupby('feature')['valor_feature_log'].transform('max')
+        df_lime_top15['valor_feature_log_norm'] = (
+            (df_lime_top15['valor_feature_log'] - df_lime_top15['valor_feature_log_min'])
+            / (df_lime_top15['valor_feature_log_max'] - df_lime_top15['valor_feature_log_min'])
+        )
+        
+        # Ordenar características para visualización
+        # Usar mismo orden que SHAP cuando sea posible
+        lime_features = df_lime_top15['feature'].unique().tolist()
+        
+        # Crear orden final (primero SHAP, luego el resto de LIME)
+        if shap_top_features is not None:
+            shap_order = list(shap_top_features)
+            final_order = [feat for feat in shap_order if feat in lime_features] + \
+                         [feat for feat in lime_features if feat not in shap_order]
+        else:
+            final_order = lime_features
+                      
+        # Definir colores comunes para ambos gráficos
+        colors = [
+            (0.0,  "#008afb"),
+            (0.2, "#008afb"),  
+            (0.7, "#ff0052"),  
+            (1.0,  "#ff0052")  
+        ]
+        
+        # Crear colormap personalizado
+        the_cmap = LinearSegmentedColormap.from_list("my_cmap", colors)
+        
+        # --- Gráfico 1: Visualización min-max ---
+        fig, ax = plt.subplots(figsize=(10,8))
+        sns.stripplot(
+            data=df_lime_top15,
+            x='peso',                  # Peso LIME en eje X
+            y='feature',               # Características en eje Y
+            hue='valor_feature_norm',  # Color según valor normalizado
+            palette=the_cmap,          # Paleta personalizada
+            hue_norm=(0, 1),           # Rango de normalización
+            orient='h',                # Horizontal
+            size=5,                    # Tamaño de puntos
+            dodge=False,               # Sin separación
+            legend=False,              # Sin leyenda independiente
+            order=final_order,         # Orden personalizado de características
+            ax=ax
+        )
+        
+        ax.axvline(0, color='black', linestyle='--')
+        ax.set_title(f"Distribución de pesos LIME - Top 15 features ({dataset_name}, Normalización Min-Max)")
+        
+        norm = mpl.colors.Normalize(vmin=0, vmax=1)
+        sm = mpl.cm.ScalarMappable(cmap=the_cmap, norm=norm)
+        sm.set_array([])
+        
+        cbar = fig.colorbar(sm, ax=ax)
+        cbar.set_label("Valor feature normalizado [0..1]")
+        
+        plt.tight_layout()
+        fig_path = os.path.join(lime_dir, "lime_pseudo_beeswarm.png")
+        plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        
+        # --- Gráfico 2: Visualización logarítmica ---
+        fig, ax = plt.subplots(figsize=(10,8))
+        sns.stripplot(
+            data=df_lime_top15,
+            x='peso',
+            y='feature',
+            hue='valor_feature_log_norm',   # Valor log-normalizado  
+            palette=the_cmap,          
+            hue_norm=(0, 1),             
+            orient='h',
+            size=5,
+            dodge=False,
+            legend=False,
+            order=final_order,
+            ax=ax
+        )
+        
+        ax.axvline(0, color='black', linestyle='--')
+        ax.set_title(f"Distribución de pesos LIME - Top 15 features ({dataset_name}, Normalización Logarítmica)")
+        
+        norm = mpl.colors.Normalize(vmin=0, vmax=1)
+        sm = mpl.cm.ScalarMappable(cmap=the_cmap, norm=norm)
+        sm.set_array([])
+        
+        cbar = fig.colorbar(sm, ax=ax)
+        cbar.set_label("Valor feature norm. logarítmica [0..1]")
+        
+        plt.tight_layout()
+        fig_path_log = os.path.join(lime_dir, "lime_pseudo_beeswarm_log.png")
+        plt.savefig(fig_path_log, dpi=dpi, bbox_inches='tight')
+        plt.close()
+        
+        print(f"  --> Visualización LIME (normalización min-max) guardada en: {fig_path}")
+        print(f"  --> Visualización LIME (normalización logarítmica) guardada en: {fig_path_log}")
+        
+        # --- Explicaciones locales para casos específicos ---
+        ind_lime_dir = os.path.join(lime_dir, "individual_analysis")
+        os.makedirs(ind_lime_dir, exist_ok=True)
+        
+        # Generar explicaciones para casos representativos
+        generate_lime_explanations_for_misclassifications(
+            X_test_lime=X_lime,
+            y_test=y_data,
+            model_clf=model_clf,
+            explainer=explainer_lime,
+            lime_dir=ind_lime_dir
+        )
+    
+        return True
+    
+    except Exception as e:
+        with open(report_path, "a", encoding="utf-8") as f_out:
+            f_out.write(f"\n=== LIME Analysis ({dataset_name}) ===\n")
+            f_out.write("No se pudo generar LIME (modelo no soportado o error):\n")
+            f_out.write(f"  {repr(e)}\n\n")
+        print(f"Error en LIME analysis para {dataset_name}:", e)
+        return False
+
 def main():
     """
     Función principal para el fine-tuning, evaluación e interpretación del mejor modelo.
@@ -91,12 +653,29 @@ def main():
     base_dir = os.path.dirname(os.path.abspath(args.variables))
     output_parent_dir = os.path.join(base_dir, "best_results")
     calibration_dir = os.path.join(output_parent_dir, "calibration")
-    shap_dir = os.path.join(output_parent_dir, "SHAP_analysis")
+    explicability_dir = os.path.join(output_parent_dir, "explicability")
+
+    train_explicability_dir = os.path.join(explicability_dir, "train")
+    test_explicability_dir = os.path.join(explicability_dir, "test")
+
+    # Subdirectorios SHAP y LIME para train
+    train_shap_dir = os.path.join(train_explicability_dir, "SHAP")
+    train_lime_dir = os.path.join(train_explicability_dir, "LIME")
+
+    # Subdirectorios SHAP y LIME para test
+    test_shap_dir = os.path.join(test_explicability_dir, "SHAP")
+    test_lime_dir = os.path.join(test_explicability_dir, "LIME")
 
     # Crear directorios si no existen
     os.makedirs(output_parent_dir, exist_ok=True)
     os.makedirs(calibration_dir, exist_ok=True)
-    os.makedirs(shap_dir, exist_ok=True)
+    os.makedirs(explicability_dir, exist_ok=True)
+    os.makedirs(train_explicability_dir, exist_ok=True)
+    os.makedirs(test_explicability_dir, exist_ok=True)
+    os.makedirs(train_shap_dir, exist_ok=True)
+    os.makedirs(train_lime_dir, exist_ok=True)
+    os.makedirs(test_shap_dir, exist_ok=True)
+    os.makedirs(test_lime_dir, exist_ok=True)
     
     print(f"\nCarpeta de salida creada/ubicada en: {os.path.relpath(output_parent_dir)}")
     
@@ -485,562 +1064,68 @@ def main():
     with open(report_path, "a", encoding="utf-8") as f_out:
         f_out.write(f"Confusion Matrix (Calibrado con threshold={best_thresh:.2f}) fig: {confusion_fig_best}\n\n")
         
-    # ------------------
-    # 7) SHAP ANALYSIS 
-    # ------------------
-    print("\nRealizando análisis SHAP...")
-    try:
-        # Extraer el preprocesador (todos los pasos excepto el clasificador final)
-        preprocessor = deepcopy(best_estimator)
-        preprocessor.steps.pop(-1) 
-        
-        # Aplicar StandardScaler conservando nombres de columnas
-        scaler = preprocessor.steps[0][1]
-        X_scaled = pd.DataFrame(scaler.transform(X_train_full),
-                                index=X_train_full.index,
-                                columns=X_train_full.columns)
-        
-        # Aplicar VarianceThreshold y recuperar columnas seleccionadas
-        vt = preprocessor.steps[1][1]
-        mask = vt.get_support()
-        selected_features = X_train_full.columns[mask]
-        X_transformed_array = vt.transform(X_scaled.values)
-        X_transformed = pd.DataFrame(X_transformed_array,
-                                     index=X_train_full.index,
-                                     columns=selected_features)
-        
-        # Extraer el clasificador final
-        model_clf = best_estimator.steps[-1][1]
-    
-        # Seleccionar el explainer adecuado según el tipo de modelo
-        if isinstance(model_clf, (RandomForestClassifier, GradientBoostingClassifier)):
-            # Para modelos basados en árboles
-            explainer = shap.TreeExplainer(model_clf)
-        elif isinstance(model_clf, LogisticRegression):
-            # Para modelos lineales
-            try:
-                explainer = shap.LinearExplainer(model_clf, X_transformed)
-            except Exception:
-                # Si falla, usar KernelExplainer como alternativa
-                background = shap.kmeans(X_transformed, 50)      # Resumen del dataset para acelerar
-                explainer = shap.KernelExplainer(model_clf.predict_proba, background)
-        else:
-            # Para otros modelos (SVM, KNN, NaiveBayes)
-            background = shap.kmeans(X_transformed, 50) # Resumen del dataset para acelerar
-            explainer = shap.KernelExplainer(model_clf.predict_proba, background)
-        
-        # Calcular los valores SHAP
-        shap_values = explainer(X_transformed)
-        joblib.dump(shap_values, os.path.join(shap_dir, 'shap_values.pkl'))
 
-        # Si se necesita cargar valores SHAP previamente calculados
-        # shap_values = joblib.load(os.path.join(shap_dir, 'shap_values.pkl'))
-        
-        # Para clasificación binaria, quedarse con los valores SHAP de la clase positiva
-        if shap_values.values.ndim > 2:
-            shap_values = shap_values[:,:,1]
-        
-        # --------------------------------------------------------------
-        # PARTE 1: TEST ESTADÍSTICO entre valores SHAP y la clase
-        # --------------------------------------------------------------
-        print(" - Realizando test estadístico (Mann-Whitney U) para cada feature con corrección Holm...")
-        
-        # Construir DataFrame con valores SHAP
-        shap_matrix = pd.DataFrame(
-            shap_values.values,
-            index=X_transformed.index,
-            columns=X_transformed.columns
-        )
-        
-        # Listas para resultados estadísticos
-        features_test = []
-        pvalues_raw = []
-        
-        # Realizar test para cada característica
-        for feat in shap_matrix.columns:
-            # Separar valores SHAP por clase
-            shap_class0 = shap_matrix.loc[y_train_full == 0, feat]
-            shap_class1 = shap_matrix.loc[y_train_full == 1, feat]
-            
-            # Test Mann-Whitney U (test no paramétrico para comparar distribuciones)
-            stat, pval = mannwhitneyu(shap_class0, shap_class1, alternative='two-sided')
-            features_test.append(feat)
-            pvalues_raw.append(pval)
-        
-        # Corrección por comparaciones múltiples (método de Holm)
-        alpha = 0.05
-        reject, pvals_corr, _, _ = multipletests(pvalues_raw, alpha=alpha, method='holm')
-        
-        # Generar reporte de resultados
-        lines_output = []
-        lines_output.append("=================================")
-        lines_output.append("TEST DE MANN-WHITNEY U (SHAP por feature) con corrección 'Holm'")
-        lines_output.append("Comparación: Clase 0 vs Clase 1")
-        lines_output.append(f"alpha = {alpha}")
-        lines_output.append(f"Features totales: {len(features_test)}") 
-        lines_output.append("=================================\n")
-        
-        lines_output.append(f"Resultados por feature (p-value crudo y corregido):")
-        significant_feats = []
-        
-        # Procesar resultados para cada característica
-        for feat, pval_raw, pval_corr, rej_bool in zip(features_test, pvalues_raw, pvals_corr, reject):
-            if rej_bool: # Diferencia significativa (rechazamos H0)
-                result_str = "=> DIFERENCIA SIGNIFICATIVA"
-                significant_feats.append((feat, pval_raw, pval_corr))
-            else:
-                result_str = "=> sin diferencia significativa"
-            
-            lines_output.append(
-                f"    {feat}: p-value crudo={pval_raw:.4e}, p-value corregido={pval_corr:.4e} {result_str}"
-            )
+    # ----------------------------------------------------------------------
+    # 7) EXPLICABILIDAD
+    # ----------------------------------------------------------------------
 
-        # Resumen de características significativas
-        lines_output.append("")
-        lines_output.append(f" Total comparaciones con diferencia significativa: {len(significant_feats)}. Comparaciones:")
-        
-        if not significant_feats:
-            lines_output.append("    No se encontraron diferencias significativas.")
-        else:
-            for feat, pval_raw, pval_corr in significant_feats:
-                lines_output.append(
-                    f"    {feat}: p-value crudo={pval_raw:.4e}, p-value corregido={pval_corr:.4e} => DIFERENCIA SIGNIFICATIVA"
-                )
-        
-        lines_output.append("\n")
-        
-        # Guardar resultados en archivo
-        test_txt_path = os.path.join(shap_dir, "shap_statistical_test.txt")
-        with open(test_txt_path, "w", encoding="utf-8") as f_out:
-            for line in lines_output:
-                f_out.write(line + "\n")
-        
-        print(f"  --> Test estadístico guardado en: {test_txt_path}")
-    
-        # --------------------------------------------------------------
-        # PARTE 2: HEATMAP (clase 0 primero, luego clase 1)
-        # --------------------------------------------------------------
-        print(" - Generando Heatmap con muestras ordenadas por clase...")
+    # Extraer el preprocesador (todos los pasos excepto el clasificador final)
+    preprocessor = deepcopy(best_estimator)
+    preprocessor.steps.pop(-1)
 
-        # Ordenar instancias por clase para visualización
-        idx_class0 = np.where(y_train_full == 0)[0]
-        idx_class1 = np.where(y_train_full == 1)[0]
-        
-        # Concatenar índices (primero clase 0, luego clase 1)
-        idx_order = np.concatenate([idx_class0, idx_class1])
-        
-        heatmap_path = os.path.join(shap_dir, "shap_heatmap.png")
-        
-        # Generar heatmap con SHAP, especificando el orden de instancias
-        shap.plots.heatmap(
-            shap_values, 
-            show=False,
-            instance_order=idx_order
-        )
-        
-        fig = plt.gcf()
-        ax = plt.gca()
-        
-        # Añadir línea divisoria entre clases
-        split_position = len(idx_class0)
-        ax.axvline(split_position - 0.5, color='black', linewidth=1, zorder=10)
+    # Extraer el clasificador final
+    model_clf = best_estimator.steps[-1][1]
 
-        n_total = len(idx_order)
-        mid_class0 = (split_position / 2) / n_total
-        mid_class1 = (split_position + len(idx_class1)/2) / n_total
-        
-        # Añadir etiquetas sobre la parte superior del heatmap
-        ax.text(mid_class0, 1.01, 'Clase 0', ha='center', va='bottom', transform=ax.transAxes)
-        ax.text(mid_class1, 1.01, 'Clase 1', ha='center', va='bottom', transform=ax.transAxes)
-        
-        # Guardar figura
-        fig.set_size_inches(10, 6)
-        plt.tight_layout()
-        plt.savefig(heatmap_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"  --> Heatmap reordenado guardado en: {heatmap_path}")
+    # Realizar análisis SHAP para conjunto de entrenamiento
+    train_success, selected_features, train_shap_values, train_top_features = perform_shap_analysis(
+        X_data=X_train_full,
+        y_data=y_train_full,
+        model_clf=model_clf,
+        preprocessor=preprocessor,
+        shap_dir=train_shap_dir,
+        report_path=report_path,
+        dataset_name="entrenamiento"
+    )
 
-    
-        # --------------
-        # Beeswarm plot 
-        # --------------
-        shap_fig_path = os.path.join(shap_dir, "shap_beeswarm.png")
-        shap.plots.beeswarm(shap_values, max_display=16, show=False)
-        fig = plt.gcf()
-        fig.set_size_inches(14, 8)
-        plt.subplots_adjust(left=0.4, right=0.95)
-        plt.tight_layout()
-        plt.savefig(shap_fig_path, dpi=dpi, bbox_inches='tight')
-        plt.close()
-        print(f"  --> Beeswarm plot guardado en: {shap_fig_path}")
-    
-        # --------------------------------------------------------------
-        # Scatter plots de las top features
-        # --------------------------------------------------------------
-        # Crear directorio para gráficos individuales
-        scatter_dir = os.path.join(shap_dir, "scatter_plots")
-        os.makedirs(scatter_dir, exist_ok=True)
+    # Realizar análisis SHAP para conjunto de test
+    test_success, _, test_shap_values, test_top_features = perform_shap_analysis(
+        X_data=X_test,
+        y_data=y_test,
+        model_clf=model_clf,
+        preprocessor=preprocessor,
+        shap_dir=test_shap_dir,
+        report_path=report_path,
+        dataset_name="test"
+    )
 
-        # Identificar las 15 características con mayor impacto (valor SHAP absoluto)
-        mean_abs_shap = np.abs(shap_values.values).mean(axis=0)
-        top_idx = np.argsort(mean_abs_shap)[-15:]
-        top_idx = top_idx[np.argsort(mean_abs_shap[top_idx])[::-1]]
-        top_features_shap = X_transformed.columns[top_idx]
-        
-        for i, feature in enumerate(top_features_shap, start=1):
-            scatter_fig_path = os.path.join(scatter_dir, f"{i:02d}_{feature}.png")
-            shap.plots.scatter(shap_values[:, feature], color=shap_values, show=False)
-            fig = plt.gcf()
-            fig.set_size_inches(10, 6)
-            plt.tight_layout()
-            plt.savefig(scatter_fig_path, dpi=dpi, bbox_inches='tight')
-            plt.close()
-        
-        print(f"  --> Scatter plots de las variables más relevantes guardados en: {scatter_dir}")
-
-    except Exception as e:
-        with open(report_path, "a", encoding="utf-8") as f_out:
-            f_out.write("=== SHAP Analysis ===\n")
-            f_out.write(" No se pudo generar SHAP (modelo no soportado o error):\n")
-            f_out.write(f"  {repr(e)}\n\n")
-        print("Error en SHAP analysis:", e)
-
-    # ------------------
-    # 8) LIME ANALYSIS 
-    # ------------------
-    print("\nRealizando análisis LIME...")
-    
-    # Función para extraer nombre de feature desde string de LIME
-    def extraer_nombre(feat_str):
-        """
-        Extrae el nombre de característica original de la representación de LIME.
-        LIME puede añadir información adicional como rangos o categorías.
-        """
-        tokens = re.findall(r'[A-Za-z0-9_\.\-]+', feat_str)
-        valid_tokens = [t for t in tokens if re.search('[A-Za-z]', t)]
-        if not valid_tokens:
-            return feat_str.strip()
-        return max(valid_tokens, key=len)
-
-    # Función para generar explicación LIME para una instancia específica
-    def explain_lime_instance(
-        X_data, 
-        index, 
-        y_true, 
-        y_pred, 
-        model_clf, 
-        explainer, 
-        lime_dir, 
-        instance_label="instancia"
-    ):
-        """
-        Genera y guarda explicación LIME para una instancia específica.
-        
-        Args:
-            X_data: Datos preprocesados
-            index: Índice de la instancia a explicar
-            y_true: Etiquetas reales
-            y_pred: Predicciones del modelo
-            model_clf: Clasificador final
-            explainer: Explainer LIME configurado
-            lime_dir: Directorio para guardar resultados
-            instance_label: Etiqueta para identificar la instancia
-        """
-        
-        # Generar explicación LIME
-        exp = explainer.explain_instance(
-            data_row=X_data[index],
-            predict_fn=model_clf.predict_proba,
-            num_features=10 # Número de características a mostrar
-        )
-        
-        # Rutas para guardar resultados
-        explanation_txt_path = os.path.join(lime_dir, f"lime_explanation_{instance_label}_{index}.txt")
-        fig_path = os.path.join(lime_dir, f"lime_explanation_{instance_label}_{index}.png")
-        
-
-        # Guardar explicación como texto
-        with open(explanation_txt_path, "w", encoding="utf-8") as f:
-            f.write(f"=== LIME Explanation para {instance_label} (índice: {index}) ===\n\n")
-            f.write(f"Clase real: {y_true[index]}\n")
-            f.write(f"Predicción del modelo: {y_pred[index]}\n")
-            f.write(f"Probabilidades: {model_clf.predict_proba([X_data[index]])}\n\n")
-            f.write("Importancia local de las features:\n")
-            for feat_info in exp.as_list():
-                f.write("  {}: {:.4f}\n".format(feat_info[0], feat_info[1]))
-        
-        # Generar y guardar visualización
-        with plt.style.context("default"):
-            lime_fig = exp.as_pyplot_figure()
-            ax = plt.gca()
-            
-            pos_color = "#0072B2"   
-            neg_color = "#E69F00"   
-        
-            for rect in ax.patches:
-                if rect.get_facecolor() == (0.0, 1.0, 0.0, 1.0): 
-                    rect.set_facecolor(pos_color)
-                elif rect.get_facecolor() == (1.0, 0.0, 0.0, 1.0):
-                    rect.set_facecolor(neg_color)
-            
-            plt.title(f"LIME Explanation - {instance_label} (index={index})")
-            plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
-            plt.close(lime_fig)
-        
-        print(f"  -> LIME para {instance_label} (índice {index}) guardado en:\n"
-              f"     {explanation_txt_path}\n"
-              f"     {fig_path}")
-    
-    # Función para generar explicaciones para casos de cada categoría (VP, VN, FP, FN)
-    def generate_lime_explanations_for_misclassifications(
-        X_test_lime,
-        y_test,
-        model_clf, 
-        explainer,
-        lime_dir
-    ):
-        """
-        Genera explicaciones LIME para ejemplos representativos de cada categoría
-        de predicción (Verdaderos Positivos, Verdaderos Negativos, Falsos Positivos, 
-        Falsos Negativos).
-        """
-        y_pred = model_clf.predict(X_test_lime)
-        
-        # Identificar índices para cada categoría
-        # True Negative (TN): real=0, pred=0
-        tn_indices = np.where((y_test == 0) & (y_pred == 0))[0]
-        # True Positive (TP): real=1, pred=1
-        tp_indices = np.where((y_test == 1) & (y_pred == 1))[0]
-        # False Positive (FP): real=0, pred=1
-        fp_indices = np.where((y_test == 0) & (y_pred == 1))[0]
-        # False Negative (FN): real=1, pred=0
-        fn_indices = np.where((y_test == 1) & (y_pred == 0))[0]
-        
-        # Función auxiliar para explicar el primer caso de cada categoría
-        def explain_first_if_any(indices, label):
-            if len(indices) > 0:
-                idx = indices[0] # Tomar el primer ejemplo
-                explain_lime_instance(
-                    X_data=X_test_lime,
-                    index=idx,
-                    y_true=y_test,
-                    y_pred=y_pred,
-                    model_clf=model_clf,
-                    explainer=explainer,
-                    lime_dir=lime_dir,
-                    instance_label=label
-                )
-            else:
-                print(f"No hay instancias para {label}.")
-        
-        # Generar explicaciones para cada categoría
-        explain_first_if_any(tn_indices, "TN")
-        explain_first_if_any(tp_indices, "TP")
-        explain_first_if_any(fp_indices, "FP")
-        explain_first_if_any(fn_indices, "FN")
-        
-    try:
-        # Crear directorio para análisis LIME
-        lime_dir = os.path.join(output_parent_dir, "LIME_analysis")
-        os.makedirs(lime_dir, exist_ok=True)
-    
-        # Extraer preprocesador (todos los pasos excepto el clasificador)
-        preprocessor_lime = deepcopy(best_estimator)
-        preprocessor_lime.steps.pop(-1)
-    
-        X_train_lime = preprocessor_lime.transform(X_train_full)
-        X_test_lime = preprocessor_lime.transform(X_test)
-        
-        # Extraer el clasificador final
-        model_clf = best_estimator.steps[-1][1]
-    
-        # Configurar explainer LIME
-        explainer_lime = LimeTabularExplainer(
-            training_data=X_train_lime,
-            feature_names=selected_features,  # Nombres de características
-            class_names=["0", "1"],          # Nombres de clases
-            discretize_continuous=True,      # Discretizar variables continuas
-            random_state=42                  # Reproducibilidad
-        )
-        
-        # Recopilar resultados de LIME para todas las instancias de entrenamiento
-        resultados = []
-        
-        # Iterar en múltiples instancias para análisis global
-        for i in range(len(X_train_lime)):
-            exp = explainer_lime.explain_instance(
-                data_row=X_train_lime[i],
-                predict_fn=model_clf.predict_proba
-            )
-
-            # Obtener lista de importancias para clase positiva
-            lime_list = exp.as_list(label=1)  
-            
-            # Procesar cada característica y su importancia
-            for (feat_str, peso) in lime_list:
-                feature_name = extraer_nombre(feat_str) 
-                col_idx = selected_features.get_loc(feature_name)
-                valor_feature = X_train_lime[i, col_idx]
-                
-                # Almacenar resultados
-                resultados.append({
-                    'instancia': i,
-                    'feature': feature_name,
-                    'peso': peso,
-                    'valor_feature': valor_feature
-                })
-        
-        df_lime = pd.DataFrame(resultados)
-        df_lime['abs_peso'] = df_lime['peso'].abs()
-        
-        # Seleccionar las 15 características con mayor peso absoluto promedio
-        top_features = (
-            df_lime.groupby('feature')['abs_peso']
-            .mean()
-            .sort_values(ascending=False)
-            .head(15)
-            .index
-            .tolist()
-        )
-        
-        # Filtrar DataFrame para mostrar solo las características principales
-        df_lime_top15 = df_lime[df_lime['feature'].isin(top_features)].copy()
-        
-        # Normalización min-max para cada característica
-        df_lime_top15['valor_min'] = df_lime_top15.groupby('feature')['valor_feature'].transform('min')
-        df_lime_top15['valor_max'] = df_lime_top15.groupby('feature')['valor_feature'].transform('max')
-        
-        # Normalización min-max (escala 0-1)
-        df_lime_top15['valor_feature_norm'] = (
-            (df_lime_top15['valor_feature'] - df_lime_top15['valor_min'])
-            / (df_lime_top15['valor_max'] - df_lime_top15['valor_min'])
-        )
-
-        
-        # Normalización logarítmica
-        # Asegurar valores positivos
-        df_lime_top15['valor_feature_shifted'] = df_lime_top15.groupby('feature')['valor_feature'].transform(
-            lambda x: x - x.min() + 1e-10 if x.min() <= 0 else x
-        )
-        # Aplicar transformación logarítmica
-        df_lime_top15['valor_feature_log'] = np.log1p(df_lime_top15['valor_feature_shifted'])
-        # Normalizar los valores logarítmicos
-        df_lime_top15['valor_feature_log_min'] = df_lime_top15.groupby('feature')['valor_feature_log'].transform('min')
-        df_lime_top15['valor_feature_log_max'] = df_lime_top15.groupby('feature')['valor_feature_log'].transform('max')
-        df_lime_top15['valor_feature_log_norm'] = (
-            (df_lime_top15['valor_feature_log'] - df_lime_top15['valor_feature_log_min'])
-            / (df_lime_top15['valor_feature_log_max'] - df_lime_top15['valor_feature_log_min'])
-        )
-        
-        # Ordenar características para visualización
-        # Usar mismo orden que SHAP cuando sea posible
-        shap_order = list(top_features_shap)
-        lime_features = df_lime_top15['feature'].unique().tolist()
-        
-        # Crear orden final (primero SHAP, luego el resto de LIME)
-        final_order = [feat for feat in shap_order if feat in lime_features] + \
-                      [feat for feat in lime_features if feat not in shap_order]
-                      
-        # Definir colores comunes para ambos gráficos
-        colors = [
-            (0.0,  "#008afb"),
-            (0.2, "#008afb"),  
-            (0.7, "#ff0052"),  
-            (1.0,  "#ff0052")  
-        ]
-        
-        # Crear colormap personalizado
-        the_cmap = LinearSegmentedColormap.from_list("my_cmap", colors)
-        
-        # --- Gráfico 1: Visualización min-max ---
-        fig, ax = plt.subplots(figsize=(10,8))
-        sns.stripplot(
-            data=df_lime_top15,
-            x='peso',                  # Peso LIME en eje X
-            y='feature',               # Características en eje Y
-            hue='valor_feature_norm',  # Color según valor normalizado
-            palette=the_cmap,          # Paleta personalizada
-            hue_norm=(0, 1),           # Rango de normalización
-            orient='h',                # Horizontal
-            size=5,                    # Tamaño de puntos
-            dodge=False,               # Sin separación
-            legend=False,              # Sin leyenda independiente
-            order=final_order,         # Orden personalizado de características
-            ax=ax
-        )
-        
-        ax.axvline(0, color='black', linestyle='--')
-        ax.set_title("Distribución de pesos LIME - Top 15 features (Normalización Min-Max)")
-        
-        norm = mpl.colors.Normalize(vmin=0, vmax=1)
-        sm = mpl.cm.ScalarMappable(cmap=the_cmap, norm=norm)
-        sm.set_array([])
-        
-        cbar = fig.colorbar(sm, ax=ax)
-        cbar.set_label("Valor feature normalizado [0..1]")
-        
-        plt.tight_layout()
-        fig_path = os.path.join(lime_dir, "lime_pseudo_beeswarm.png")
-        plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
-        plt.close()
-        
-
-        # --- Gráfico 2: Visualización logarítmica ---
-        fig, ax = plt.subplots(figsize=(10,8))
-        sns.stripplot(
-            data=df_lime_top15,
-            x='peso',
-            y='feature',
-            hue='valor_feature_log_norm',   # Valor log-normalizado  
-            palette=the_cmap,          
-            hue_norm=(0, 1),             
-            orient='h',
-            size=5,
-            dodge=False,
-            legend=False,
-            order=final_order,
-            ax=ax
-        )
-        
-        ax.axvline(0, color='black', linestyle='--')
-        ax.set_title("Distribución de pesos LIME - Top 15 features (Normalización Logarítmica)")
-        
-        norm = mpl.colors.Normalize(vmin=0, vmax=1)
-        sm = mpl.cm.ScalarMappable(cmap=the_cmap, norm=norm)
-        sm.set_array([])
-        
-        cbar = fig.colorbar(sm, ax=ax)
-        cbar.set_label("Valor feature norm. logarítmica [0..1]")
-        
-        plt.tight_layout()
-        fig_path_log = os.path.join(lime_dir, "lime_pseudo_beeswarm_log.png")
-        plt.savefig(fig_path_log, dpi=dpi, bbox_inches='tight')
-        plt.close()
-        
-        print(f"  --> Visualización LIME (normalización min-max) guardada en: {fig_path}")
-        print(f"  --> Visualización LIME (normalización logarítmica) guardada en: {fig_path_log}")
-        
-
-        # --- Explicaciones locales para casos específicos ---
-        ind_lime_dir = os.path.join(lime_dir, "individual_analysis")
-        os.makedirs(ind_lime_dir, exist_ok=True)
-        
-        # Generar explicaciones para casos representativos
-        generate_lime_explanations_for_misclassifications(
-            X_test_lime=X_test_lime,
-            y_test=y_test,
+    # Realizar análisis LIME para conjunto de entrenamiento
+    if train_success:
+        train_lime_success = perform_lime_analysis(
+            X_data=X_train_full,
+            y_data=y_train_full,
             model_clf=model_clf,
-            explainer=explainer_lime,
-            lime_dir=ind_lime_dir
+            preprocessor=preprocessor,
+            lime_dir=train_lime_dir,
+            selected_features=selected_features,
+            report_path=report_path,
+            shap_top_features=train_top_features,
+            dataset_name="entrenamiento"
         )
-    
-    except Exception as e:
-        with open(report_path, "a", encoding="utf-8") as f_out:
-            f_out.write("\n=== LIME Analysis ===\n")
-            f_out.write("No se pudo generar LIME (modelo no soportado o error):\n")
-            f_out.write(f"  {repr(e)}\n\n")
-        print("Error en LIME analysis:", e)      
-        
+
+    # Realizar análisis LIME para conjunto de test
+    if test_success:
+        test_lime_success = perform_lime_analysis(
+            X_data=X_test,
+            y_data=y_test,
+            model_clf=model_clf,
+            preprocessor=preprocessor,
+            lime_dir=test_lime_dir,
+            selected_features=selected_features,
+            report_path=report_path,
+            shap_top_features=test_top_features,
+            dataset_name="test"
+        )
+            
     print(f"\nProceso finalizado. Report guardado en: {report_path}")
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+Índice: 266
+Forma: (3, 128, 128, 32)
+Nombre archivo: 11313_1001336_t2w.mha
+Clase real: 1 (csPCa)
+Predicción: 1 (csPCa)
+Probabilidades: [no_csPCa: 0.0332, csPCa: 0.9668]
