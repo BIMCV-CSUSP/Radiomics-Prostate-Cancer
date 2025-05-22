@@ -1,0 +1,22 @@
+=== Comparación de configuración: base-efficientnet-b7 ===
+
+Estadística descriptiva:
+  - val_auc glándula: media = 0.7325, std = 0.0416
+  - val_auc imagen completa: media = 0.6236, std = 0.0269
+  - Diferencia de medias: 0.1089 (glándula - full)
+
+Test de normalidad Shapiro-Wilk sobre las diferencias de val_auc:
+  - Estadístico W = 0.7100, p-valor = 0.0121 -> No se asume normalidad
+
+Test aplicado: Wilcoxon signed-rank
+  - Estadístico = 0.0000
+  - p-valor (2 colas) = 0.0625
+  - No significativo (p=0.0625 ≥ 0.05) -> No se rechaza H₀: no hay diferencia significativa.
+
+Prueba unilateral: p=0.9688 ≥ 0.05. No hay evidencia suficiente de que glándula > imagen completa.
+
+Tamaño del efecto (Cohen's d): 2.765 -> GRANDE
+Resumen:
+No se ha encontrado diferencia significativa entre ambos enfoques según el Wilcoxon signed-rank.
+Medias: glándula = 0.733, imagen completa = 0.624
+Tamaño del efecto (Cohen's d): 2.765 -> GRANDE

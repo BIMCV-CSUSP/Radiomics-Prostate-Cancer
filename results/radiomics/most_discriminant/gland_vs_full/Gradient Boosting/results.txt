@@ -1,0 +1,21 @@
+=== Comparación de modelos: Gradient Boosting ===
+
+Estadística descriptiva:
+  - AUC validación glándula: media = 0.8067, std = 0.0338
+  - AUC validación imagen completa: media = 0.5779, std = 0.0447
+  - Diferencia de medias: 0.2288 (glándula - full)
+
+Test de normalidad Shapiro-Wilk sobre las diferencias de AUC:
+  - Estadístico W = 0.9740, p-valor = 0.3332 -> Se asume normalidad
+
+Test aplicado: t-test pareado
+  - Estadístico = 34.6311
+  - p-valor (2 colas) = 0.0000
+  - Significativo (p=0.0000 < 0.05) -> Se rechaza H₀: hay diferencia entre enfoques.
+
+Prueba unilateral: p=0.0000 < 0.05. Hay evidencia de que glándula > imagen completa.
+
+Resumen:
+Existe evidencia estadística de diferencia entre enfoques según el t-test pareado.
+El enfoque con mayor AUC medio es: **glándula**
+Además, la prueba unilateral respalda que 'glándula' es superior.

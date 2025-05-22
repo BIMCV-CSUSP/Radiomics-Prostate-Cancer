@@ -1,0 +1,21 @@
+=== Comparación de modelos: SVM ===
+
+Estadística descriptiva:
+  - AUC validación glándula: media = 0.8086, std = 0.0355
+  - AUC validación imagen completa: media = 0.6340, std = 0.0502
+  - Diferencia de medias: 0.1746 (glándula - full)
+
+Test de normalidad Shapiro-Wilk sobre las diferencias de AUC:
+  - Estadístico W = 0.9797, p-valor = 0.5393 -> Se asume normalidad
+
+Test aplicado: t-test pareado
+  - Estadístico = 25.1654
+  - p-valor (2 colas) = 0.0000
+  - Significativo (p=0.0000 < 0.05) -> Se rechaza H₀: hay diferencia entre enfoques.
+
+Prueba unilateral: p=0.0000 < 0.05. Hay evidencia de que glándula > imagen completa.
+
+Resumen:
+Existe evidencia estadística de diferencia entre enfoques según el t-test pareado.
+El enfoque con mayor AUC medio es: **glándula**
+Además, la prueba unilateral respalda que 'glándula' es superior.
