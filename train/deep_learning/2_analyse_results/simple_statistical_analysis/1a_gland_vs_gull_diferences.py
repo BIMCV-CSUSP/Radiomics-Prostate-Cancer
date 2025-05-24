@@ -1,161 +1,106 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse
-import os
-import pandas as pd
+"""
+Compara, para cada configuración de Deep Learning, la estrategia
+glándula vs. imagen completa mediante:
+
+  • Test de Wilcoxon pareado (dos colas) + su versión unilateral
+    (H₁: glándula > full).
+  • Tamaño del efecto (Cohen's d) sobre las diferencias de AUC.
+  • Informe de texto y boxplot con los resultados.
+
+Pensado para validación cruzada con sólo 5 folds por configuración.
+"""
+
+import argparse, os
 import numpy as np
-from scipy.stats import ttest_rel, wilcoxon, shapiro
+import pandas as pd
+from scipy.stats import wilcoxon
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import scienceplots
-
 plt.style.use(['science', 'grid'])
 
-def one_sided_p_from_two_sided(stat, p_two, direction):
-    if stat * direction > 0:
-        return p_two / 2
-    else:
-        return 1 - (p_two / 2)
+# ---------- utilidades -------------------------------------------------
+def one_sided_from_two_sided(stat, p_two, direction=+1):
+    """Convierte p-valor bicaudal en unilateral (direction = +1 → glándula > full)."""
+    return p_two/2 if stat*direction > 0 else 1 - p_two/2
 
-def read_auc_from_folder(config_folder, metric_col='val_auc'):
-    """
-    Lee los resultados de los 5 CSVs en la carpeta y devuelve un vector de AUCs.
-    """
-    aucs = []
-    for file in sorted(os.listdir(config_folder)):
-        if file.endswith('.csv'):
-            df = pd.read_csv(os.path.join(config_folder, file))
-            # Coge el máximo valor de la métrica en el CSV (por si es por época)
-            if metric_col in df.columns:
-                auc = df[metric_col].max()
-                aucs.append(auc)
-    return np.array(aucs)
+def read_auc_from_folder(folder, metric='val_auc'):
+    """Devuelve un vector con el máximo AUC de cada CSV de la carpeta."""
+    vals = []
+    for f in sorted(os.listdir(folder)):
+        if f.endswith('.csv'):
+            df = pd.read_csv(os.path.join(folder, f))
+            if metric in df.columns:
+                vals.append(df[metric].max())
+    return np.asarray(vals)
+# -----------------------------------------------------------------------
 
-def compare_configs(gland_dir, full_dir, output_dir, metric_col='val_auc', alpha=0.05):
-    """
-    Compara cada configuración (subcarpeta) entre gland y full.
-    Hace test de normalidad sobre la diferencia, escoge test adecuado (t o Wilcoxon),
-    calcula Cohen's d y genera informe y boxplot.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    # Listar las configuraciones presentes en ambos enfoques
-    gland_configs = sorted([c for c in os.listdir(gland_dir) if os.path.isdir(os.path.join(gland_dir, c))])
-    full_configs = sorted([c for c in os.listdir(full_dir) if os.path.isdir(os.path.join(full_dir, c))])
-    common_configs = sorted(list(set(gland_configs).intersection(full_configs)))
-    if not common_configs:
-        raise ValueError("No hay configuraciones en común entre ambos directorios.")
+def compare_configs(gland_dir, full_dir, out_dir,
+                    metric='val_auc', alpha=0.05):
+    os.makedirs(out_dir, exist_ok=True)
 
-    for config in common_configs:
-        config_dir_g = os.path.join(gland_dir, config)
-        config_dir_f = os.path.join(full_dir, config)
-        auc_g = read_auc_from_folder(config_dir_g, metric_col)
-        auc_f = read_auc_from_folder(config_dir_f, metric_col)
+    gland_cfgs = {c for c in os.listdir(gland_dir)
+                  if os.path.isdir(os.path.join(gland_dir, c))}
+    full_cfgs  = {c for c in os.listdir(full_dir)
+                  if os.path.isdir(os.path.join(full_dir,  c))}
+    comunes = sorted(gland_cfgs & full_cfgs)
+    if not comunes:
+        raise ValueError("No hay configuraciones comunes entre carpetas.")
 
-        mean_g, std_g = np.mean(auc_g), np.std(auc_g, ddof=1)
-        mean_f, std_f = np.mean(auc_f), np.std(auc_f, ddof=1)
-        diff = mean_g - mean_f
+    for cfg in comunes:
+        auc_g = read_auc_from_folder(os.path.join(gland_dir, cfg), metric)
+        auc_f = read_auc_from_folder(os.path.join(full_dir,  cfg), metric)
 
-        # Cohen's d para muestras pareadas
-        diff_vec = auc_g - auc_f
-        mean_diff = np.mean(diff_vec)
-        std_diff = np.std(diff_vec, ddof=1)
-        cohen_d = mean_diff / std_diff if std_diff != 0 else np.nan
+        mean_g, mean_f = auc_g.mean(), auc_f.mean()
+        diff_vec       = auc_g - auc_f
+        w_stat, p_two  = wilcoxon(auc_g, auc_f)              # Wilcoxon dos colas
+        p_one          = one_sided_from_two_sided(w_stat, p_two, +1)
 
-        # Test de normalidad Shapiro-Wilk sobre las diferencias
-        w_shap, p_shap = shapiro(diff_vec)
-        normalidad = p_shap > alpha
+        # --- Cohen's d para muestras pareadas ---
+        cohen_d = diff_vec.mean() / diff_vec.std(ddof=1) if diff_vec.std(ddof=1) else np.nan
+        efecto  = ("GRANDE" if abs(cohen_d) >= 0.8 else
+                   "MEDIO"  if abs(cohen_d) >= 0.5 else
+                   "PEQUEÑO" if abs(cohen_d) >= 0.2 else "DESPRECIABLE")
 
-        if normalidad:
-            test_name = "t-test pareado"
-            t_stat, p_two_t = ttest_rel(auc_g, auc_f)
-            p_one_t = one_sided_p_from_two_sided(t_stat, p_two_t, direction=+1)
-            stat_report = t_stat
-            p_report = p_two_t
-            p_one_report = p_one_t
-        else:
-            test_name = "Wilcoxon signed-rank"
-            w_stat, p_two_w = wilcoxon(auc_g, auc_f)
-            p_one_w = one_sided_p_from_two_sided(w_stat, p_two_w, direction=+1)
-            stat_report = w_stat
-            p_report = p_two_w
-            p_one_report = p_one_w
+        # --- Informe de resultados ---
+        cfg_out = os.path.join(out_dir, cfg)
+        os.makedirs(cfg_out, exist_ok=True)
+        with open(os.path.join(cfg_out, 'results.txt'), 'w', encoding='utf-8') as f:
+            f.write(f"=== Configuración: {cfg} ===\n\n")
+            f.write(f"{metric} (media ± sd)\n")
+            f.write(f"  • Glándula............. {mean_g:.4f} ± {auc_g.std(ddof=1):.4f}\n")
+            f.write(f"  • Imagen completa...... {mean_f:.4f} ± {auc_f.std(ddof=1):.4f}\n\n")
+            f.write("Test de Wilcoxon pareado (dos colas)\n")
+            f.write(f"  W = {w_stat:.4f},  p = {p_two:.4e}\n")
+            f.write("Conclusión: " +
+                    ("DIFERENCIA SIGNIFICATIVA" if p_two < alpha else "no significativa") +
+                    f"  (α = {alpha})\n\n")
+            f.write("Wilcoxon unilateral (H₁: glándula > full)\n")
+            f.write(f"  p = {p_one:.4e}\n\n")
+            f.write(f"Cohen's d = {cohen_d:.3f}  →  {efecto}\n\n")
+            if p_two < alpha:
+                mejor = "glándula" if mean_g > mean_f else "imagen completa"
+                f.write(f"Resumen: el enfoque **{mejor}** obtiene mayor {metric} medio.\n")
+            else:
+                f.write("Resumen: no se detectan diferencias significativas.\n")
 
-        # Interpretación
-        diff_dir = 'glándula' if mean_g > mean_f else 'imagen completa'
-        interpret_res = (
-            f"Significativo (p={p_report:.4f} < {alpha}) -> Se rechaza H₀: hay diferencia entre enfoques."
-            if p_report < alpha else
-            f"No significativo (p={p_report:.4f} ≥ {alpha}) -> No se rechaza H₀: no hay diferencia significativa."
-        )
-        interpret_one = (
-            f"Prueba unilateral: p={p_one_report:.4f} < {alpha}. Hay evidencia de que glándula > imagen completa."
-            if p_one_report < alpha else
-            f"Prueba unilateral: p={p_one_report:.4f} ≥ {alpha}. No hay evidencia suficiente de que glándula > imagen completa."
-        )
-
-        interpret_cohen = (
-            f"Tamaño del efecto (Cohen's d): {cohen_d:.3f} -> "
-            f"{'GRANDE' if abs(cohen_d) >= 0.8 else 'MEDIO' if abs(cohen_d) >= 0.5 else 'PEQUEÑO' if abs(cohen_d) >= 0.2 else 'DESPRECIABLE'}"
-        )
-
-        resumen = ""
-        if p_report < alpha:
-            resumen += (
-                f"Resumen:\n"
-                f"Existe evidencia estadística de diferencia entre enfoques según el {test_name}.\n"
-                f"El enfoque con mayor {metric_col} medio es: **{diff_dir}**\n"
-            )
-            if mean_g > mean_f and p_one_report < alpha:
-                resumen += "Además, la prueba unilateral respalda que 'glándula' es superior.\n"
-            elif mean_g < mean_f:
-                resumen += "Sin embargo, el enfoque de imagen completa obtiene mayor valor medio.\n"
-            resumen += interpret_cohen + "\n"
-        else:
-            resumen += (
-                f"Resumen:\n"
-                f"No se ha encontrado diferencia significativa entre ambos enfoques según el {test_name}.\n"
-                f"Medias: glándula = {mean_g:.3f}, imagen completa = {mean_f:.3f}\n"
-            )
-            resumen += interpret_cohen + "\n"
-
-        # Crear salida por configuración
-        model_dir = os.path.join(output_dir, config)
-        os.makedirs(model_dir, exist_ok=True)
-        txt_path = os.path.join(model_dir, 'results.txt')
-        with open(txt_path, 'w', encoding='utf-8') as f:
-            f.write(f"=== Comparación de configuración: {config} ===\n\n")
-            f.write(f"Estadística descriptiva:\n")
-            f.write(f"  - {metric_col} glándula: media = {mean_g:.4f}, std = {std_g:.4f}\n")
-            f.write(f"  - {metric_col} imagen completa: media = {mean_f:.4f}, std = {std_f:.4f}\n")
-            f.write(f"  - Diferencia de medias: {diff:.4f} (glándula - full)\n\n")
-            f.write(f"Test de normalidad Shapiro-Wilk sobre las diferencias de {metric_col}:\n")
-            f.write(f"  - Estadístico W = {w_shap:.4f}, p-valor = {p_shap:.4f} -> ")
-            f.write("Se asume normalidad\n" if normalidad else "No se asume normalidad\n")
-            f.write(f"\nTest aplicado: {test_name}\n")
-            f.write(f"  - Estadístico = {stat_report:.4f}\n")
-            f.write(f"  - p-valor (2 colas) = {p_report:.4f}\n")
-            f.write(f"  - {interpret_res}\n")
-            f.write(f"\n{interpret_one}\n\n")
-            f.write(f"{interpret_cohen}\n")
-            f.write(resumen)
-
-        # Boxplot
-        props = dict(
-            boxprops=dict(color='black'),
-            medianprops=dict(color='black'),
-            whiskerprops=dict(color='black'),
-            capprops=dict(color='black'),
-            flierprops=dict(color='black')
-        )
-        plt.figure(figsize=(8,5))
-        plt.boxplot([auc_g, auc_f], labels=['Glándula','Imagen completa'], **props)
-        plt.title(f"Comparación {metric_col}: {config}")
-        plt.ylabel(metric_col)
-        plt.xticks(rotation=45, ha='right')
-        boxplot_path = os.path.join(model_dir, 'boxplot.png')
-        plt.savefig(boxplot_path, dpi=300, bbox_inches='tight')
+        # --- Boxplot ---
+        plt.figure(figsize=(7,4))
+        plt.boxplot([auc_g, auc_f],
+                    labels=['Glándula', 'Imagen\ncompleta'],
+                    boxprops=dict(color='black'),
+                    medianprops=dict(color='black'),
+                    whiskerprops=dict(color='black'),
+                    capprops=dict(color='black'),
+                    flierprops=dict(color='black'))
+        plt.title(f"{cfg}: {metric}  (p={p_two:.3f})")
+        plt.ylabel(metric)
+        plt.tight_layout()
+        plt.savefig(os.path.join(cfg_out, 'boxplot.png'), dpi=300)
         plt.close()
 
 def main():

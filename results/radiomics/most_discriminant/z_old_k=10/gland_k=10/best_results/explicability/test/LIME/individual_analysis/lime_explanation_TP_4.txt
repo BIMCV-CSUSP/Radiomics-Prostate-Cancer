@@ -1,0 +1,17 @@
+=== LIME Explanation para TP (índice: 4) ===
+
+Clase real: 1
+Predicción del modelo: 1
+Probabilidades: [[0.18281945 0.81718055]]
+
+Importancia local de las features:
+  dwi_square_firstorder_Skewness > 0.12: 0.2018
+  dwi_square_firstorder_Kurtosis > -0.09: -0.1919
+  dwi_log-sigma-3-mm-3D_firstorder_Skewness <= -0.38: 0.1199
+  dwi_wavelet2-LL_glszm_GrayLevelNonUniformity <= -0.61: 0.1130
+  dwi_log-sigma-2-mm-3D_firstorder_Kurtosis > 0.03: -0.1067
+  dwi_original_firstorder_Kurtosis > -0.00: -0.0845
+  t2_original_glszm_GrayLevelNonUniformity <= -0.64: 0.0768
+  dwi_exponential_glcm_Imc1 <= -0.83: 0.0752
+  -0.63 < dwi_log-sigma-2-mm-3D_glrlm_GrayLevelNonUniformity <= -0.17: -0.0621
+  dwi_exponential_firstorder_Skewness > 0.20: 0.0573

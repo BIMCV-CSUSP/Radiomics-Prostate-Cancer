@@ -1,21 +1,15 @@
-=== Comparación de modelos: Naive Bayes ===
+=== Naive Bayes: glándula vs. imagen completa ===
 
-Estadística descriptiva:
-  - AUC validación glándula: media = 0.7491, std = 0.0471
-  - AUC validación imagen completa: media = 0.5698, std = 0.0556
-  - Diferencia de medias: 0.1793 (glándula - full)
+AUC (media ± sd)
+  • Glándula............. 0.7491 ± 0.0298
+  • Imagen completa...... 0.5681 ± 0.0315
 
-Test de normalidad Shapiro-Wilk sobre las diferencias de AUC:
-  - Estadístico W = 0.9847, p-valor = 0.7596 -> Se asume normalidad
+Test de Wilcoxon pareado (dos colas)
+  W = 0.0000,  p = 1.7764e-15
+Conclusión: DIFERENCIA SIGNIFICATIVA (α = 0.05)
 
-Test aplicado: t-test pareado
-  - Estadístico = 18.8034
-  - p-valor (2 colas) = 0.0000
-  - Significativo (p=0.0000 < 0.05) -> Se rechaza H₀: hay diferencia entre enfoques.
-
-Prueba unilateral: p=0.0000 < 0.05. Hay evidencia de que glándula > imagen completa.
+Wilcoxon unilateral (H₁: glándula > full)
+  p = 1.0000e+00
 
 Resumen:
-Existe evidencia estadística de diferencia entre enfoques según el t-test pareado.
-El enfoque con mayor AUC medio es: **glándula**
-Además, la prueba unilateral respalda que 'glándula' es superior.
+  El enfoque con mayor AUC medio es **glándula**.

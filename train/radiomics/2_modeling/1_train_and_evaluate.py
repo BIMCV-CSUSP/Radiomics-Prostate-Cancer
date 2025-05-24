@@ -294,11 +294,11 @@ def main():
         help="Directorio base donde se crearán los resultados."
     )
     parser.add_argument(
-        "--n_splits", type=int, default=10,
+        "--n_splits", type=int, default=5,
         help="Número de particiones para StratifiedGroupKFold (por repetición)."
     )
     parser.add_argument(
-        "--n_repeats", type=int, default=5,
+        "--n_repeats", type=int, default=10,
         help="Número de repeticiones de la validación cruzada."
     )
     parser.add_argument(

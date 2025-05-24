@@ -1,23 +1,16 @@
-=== Comparación de configuración: config1 ===
+=== Configuración: config1 ===
 
-Estadística descriptiva:
-  - val_auc glándula: media = 0.8109, std = 0.0177
-  - val_auc imagen completa: media = 0.6962, std = 0.0324
-  - Diferencia de medias: 0.1147 (glándula - full)
+val_auc (media ± sd)
+  • Glándula............. 0.8109 ± 0.0177
+  • Imagen completa...... 0.6962 ± 0.0324
 
-Test de normalidad Shapiro-Wilk sobre las diferencias de val_auc:
-  - Estadístico W = 0.9123, p-valor = 0.4816 -> Se asume normalidad
+Test de Wilcoxon pareado (dos colas)
+  W = 0.0000,  p = 6.2500e-02
+Conclusión: no significativa  (α = 0.05)
 
-Test aplicado: t-test pareado
-  - Estadístico = 10.0321
-  - p-valor (2 colas) = 0.0006
-  - Significativo (p=0.0006 < 0.05) -> Se rechaza H₀: hay diferencia entre enfoques.
+Wilcoxon unilateral (H₁: glándula > full)
+  p = 9.6875e-01
 
-Prueba unilateral: p=0.0003 < 0.05. Hay evidencia de que glándula > imagen completa.
+Cohen's d = 4.486  →  GRANDE
 
-Tamaño del efecto (Cohen's d): 4.486 -> GRANDE
-Resumen:
-Existe evidencia estadística de diferencia entre enfoques según el t-test pareado.
-El enfoque con mayor val_auc medio es: **glándula**
-Además, la prueba unilateral respalda que 'glándula' es superior.
-Tamaño del efecto (Cohen's d): 4.486 -> GRANDE
+Resumen: no se detectan diferencias significativas.

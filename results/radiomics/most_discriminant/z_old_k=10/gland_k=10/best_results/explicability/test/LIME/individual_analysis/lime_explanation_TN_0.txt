@@ -1,0 +1,17 @@
+=== LIME Explanation para TN (índice: 0) ===
+
+Clase real: 0
+Predicción del modelo: 0
+Probabilidades: [[0.53228508 0.46771492]]
+
+Importancia local de las features:
+  dwi_log-sigma-3-mm-3D_firstorder_Skewness <= -0.38: 0.1057
+  dwi_log-sigma-0-6-mm-3D_glszm_ZoneVariance > 0.39: -0.0894
+  -0.21 < dwi_square_firstorder_Kurtosis <= -0.09: 0.0758
+  adc_wavelet2-LL_ngtdm_Coarseness <= -0.82: -0.0754
+  -0.52 < dwi_square_firstorder_Skewness <= -0.28: -0.0735
+  dwi_exponential_firstorder_Skewness > 0.20: 0.0718
+  dwi_exponential_ngtdm_Complexity > -0.12: 0.0668
+  dwi_exponential_glrlm_GrayLevelVariance > -0.04: 0.0661
+  dwi_exponential_glcm_ClusterProminence > -0.13: -0.0646
+  dwi_exponential_glcm_Imc1 <= -0.83: 0.0608

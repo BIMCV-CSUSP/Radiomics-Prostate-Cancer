@@ -1,145 +1,82 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
 import argparse
 import os
-import pandas as pd
 import numpy as np
-from scipy.stats import ttest_rel, wilcoxon, shapiro
+import pandas as pd
+from scipy.stats import wilcoxon
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import scienceplots
-
 plt.style.use(['science', 'grid'])
 
-def one_sided_p_from_two_sided(stat, p_two, direction):
-    """
-    Convierte un p-valor bicaudal en un p-valor unilateral.
-    `direction` debe ser +1 si H1 es mean(diff) > 0, o -1 si H1 es mean(diff) < 0.
-    """
-    if stat * direction > 0:
-        return p_two / 2
-    else:
-        return 1 - (p_two / 2)
+def one_sided_from_two_sided(stat, p_two, direction=+1):
+    """Convierte un p-valor bicaudal en unilateral."""
+    return p_two/2 if stat*direction > 0 else 1 - p_two/2
 
-
-def compare_models(gland_csv, full_csv, output_dir, alpha=0.05):
+def compare_models(gland_csv, full_csv, outdir, alpha=0.05):
     """
-    Compara los resultados de validación de distintos modelos entre dos enfoques:
-    solo glándula vs imagen completa. Para cada clasificador:
-      - Calcula la media y desviación estándar del AUC de validación en cada enfoque.
-      - Realiza un t-test pareado (paramétrico) y un test de Wilcoxon (no paramétrico).
-      - Realiza la versión unilateral del t-test y de Wilcoxon para H1: glándula > full.
-      - Genera un boxplot comparativo.
-      - Escribe un informe interpretando los resultados, explicando cada test y la conclusión final.
+    Compara, para cada clasificador, la estrategia glándula vs. imagen completa
+    usando SIEMPRE el test de Wilcoxon para muestras pareadas.
     """
     df_gland = pd.read_csv(gland_csv)
     df_full  = pd.read_csv(full_csv)
 
-    os.makedirs(output_dir, exist_ok=True)
     modelos = sorted(set(df_gland['Classifier']).intersection(df_full['Classifier']))
     if not modelos:
         raise ValueError("No hay modelos en común entre ambos ficheros.")
 
+    os.makedirs(outdir, exist_ok=True)
+
     for model in modelos:
-        model_dir = os.path.join(output_dir, model)
-        os.makedirs(model_dir, exist_ok=True)
-        
-        auc_g = df_gland[df_gland['Classifier'] == model]['val_auc'].values
-        auc_f = df_full[df_full['Classifier'] == model]['val_auc'].values
+        auc_g = df_gland.loc[df_gland['Classifier'] == model, 'val_auc'].values
+        auc_f = df_full .loc[df_full ['Classifier'] == model, 'val_auc'].values
 
-        # Estadísticos descriptivos
-        mean_g, std_g = np.mean(auc_g), np.std(auc_g, ddof=1)
-        mean_f, std_f = np.mean(auc_f), np.std(auc_f, ddof=1)
-        diff = mean_g - mean_f
+        # --- Wilcoxon (dos colas) ---
+        w_stat, p_two = wilcoxon(auc_g, auc_f)
+        # --- Wilcoxon (una cola, H1: glándula > full) ---
+        p_one = one_sided_from_two_sided(w_stat, p_two, direction=+1)
 
-        # Test de normalidad Shapiro-Wilk sobre la diferencia de AUCs
-        diff_vec = auc_g - auc_f
-        w_shap, p_shap = shapiro(diff_vec)
-        normalidad = p_shap > alpha
+        # Estadística descriptiva
+        mean_g, mean_f = np.mean(auc_g), np.mean(auc_f)
+        diff_dir       = 'glándula' if mean_g > mean_f else 'imagen completa'
 
-        # Según normalidad, test adecuado
-        if normalidad:
-            test_name = "t-test pareado"
-            t_stat, p_two_t = ttest_rel(auc_g, auc_f)
-            # Test unilateral
-            p_one_t = one_sided_p_from_two_sided(t_stat, p_two_t, direction=+1)
-            # Para uniformidad, igualamos nombre de variables
-            stat_report = t_stat
-            p_report = p_two_t
-            p_one_report = p_one_t
-        else:
-            test_name = "Wilcoxon signed-rank"
-            w_stat, p_two_w = wilcoxon(auc_g, auc_f)
-            p_one_w = one_sided_p_from_two_sided(w_stat, p_two_w, direction=+1)
-            stat_report = w_stat
-            p_report = p_two_w
-            p_one_report = p_one_w
+        # --- Informe ---
+        mdl_dir = os.path.join(outdir, model)
+        os.makedirs(mdl_dir, exist_ok=True)
+        with open(os.path.join(mdl_dir, 'results.txt'), 'w', encoding='utf-8') as f:
+            f.write(f"=== {model}: glándula vs. imagen completa ===\n\n")
+            f.write(f"AUC (media ± sd)\n")
+            f.write(f"  • Glándula............. {mean_g:.4f} ± {np.std(auc_g, ddof=1):.4f}\n")
+            f.write(f"  • Imagen completa...... {mean_f:.4f} ± {np.std(auc_f, ddof=1):.4f}\n\n")
+            f.write("Test de Wilcoxon pareado (dos colas)\n")
+            f.write(f"  W = {w_stat:.4f},  p = {p_two:.4e}\n")
+            f.write("Conclusión: " +
+                    ("DIFERENCIA SIGNIFICATIVA" if p_two < alpha else "no significativa") +
+                    f" (α = {alpha})\n\n")
+            f.write("Wilcoxon unilateral (H₁: glándula > full)\n")
+            f.write(f"  p = {p_one:.4e}\n\n")
+            f.write("Resumen:\n")
+            if p_two < alpha:
+                f.write(f"  El enfoque con mayor AUC medio es **{diff_dir}**.\n")
+            else:
+                f.write("  No se detectan diferencias significativas entre enfoques.\n")
 
-        # Interpretaciones
-        diff_dir = 'glándula' if mean_g > mean_f else 'imagen completa'
-        interpret_res = (
-            f"Significativo (p={p_report:.4f} < {alpha}) -> Se rechaza H₀: hay diferencia entre enfoques."
-            if p_report < alpha else
-            f"No significativo (p={p_report:.4f} ≥ {alpha}) -> No se rechaza H₀: no hay diferencia significativa."
-        )
-        interpret_one = (
-            f"Prueba unilateral: p={p_one_report:.4f} < {alpha}. Hay evidencia de que glándula > imagen completa."
-            if p_one_report < alpha else
-            f"Prueba unilateral: p={p_one_report:.4f} ≥ {alpha}. No hay evidencia suficiente de que glándula > imagen completa."
-        )
-
-        resumen = ""
-        if p_report < alpha:
-            resumen += (
-                f"Resumen:\n"
-                f"Existe evidencia estadística de diferencia entre enfoques según el {test_name}.\n"
-                f"El enfoque con mayor AUC medio es: **{diff_dir}**\n"
-            )
-            if mean_g > mean_f and p_one_report < alpha:
-                resumen += "Además, la prueba unilateral respalda que 'glándula' es superior.\n"
-            elif mean_g < mean_f:
-                resumen += "Sin embargo, el enfoque de imagen completa obtiene mayor AUC medio.\n"
-        else:
-            resumen += (
-                f"Resumen:\n"
-                f"No se ha encontrado diferencia significativa entre ambos enfoques según el {test_name}.\n"
-                f"AUC medios: glándula = {mean_g:.3f}, imagen completa = {mean_f:.3f}\n"
-            )
-
-        # Guardar el informe
-        txt_path = os.path.join(model_dir, 'results.txt')
-        with open(txt_path, 'w', encoding='utf-8') as f:
-            f.write(f"=== Comparación de modelos: {model} ===\n\n")
-            f.write(f"Estadística descriptiva:\n")
-            f.write(f"  - AUC validación glándula: media = {mean_g:.4f}, std = {std_g:.4f}\n")
-            f.write(f"  - AUC validación imagen completa: media = {mean_f:.4f}, std = {std_f:.4f}\n")
-            f.write(f"  - Diferencia de medias: {diff:.4f} (glándula - full)\n\n")
-            f.write(f"Test de normalidad Shapiro-Wilk sobre las diferencias de AUC:\n")
-            f.write(f"  - Estadístico W = {w_shap:.4f}, p-valor = {p_shap:.4f} -> ")
-            f.write("Se asume normalidad\n" if normalidad else "No se asume normalidad\n")
-            f.write(f"\nTest aplicado: {test_name}\n")
-            f.write(f"  - Estadístico = {stat_report:.4f}\n")
-            f.write(f"  - p-valor (2 colas) = {p_report:.4f}\n")
-            f.write(f"  - {interpret_res}\n")
-            f.write(f"\n{interpret_one}\n\n")
-            f.write(resumen)
-
-        # Boxplot
-        props = dict(
-            boxprops=dict(color='black'),
-            medianprops=dict(color='black'),
-            whiskerprops=dict(color='black'),
-            capprops=dict(color='black'),
-            flierprops=dict(color='black')
-        )
-        plt.figure(figsize=(8,5))
-        plt.boxplot([auc_g, auc_f], labels=['Glándula','Imagen completa'], **props)
-        plt.title(f"Comparación AUC validación: {model}")
+        # --- Boxplot ---
+        plt.figure(figsize=(6,4))
+        plt.boxplot([auc_g, auc_f],
+                    labels=['Glándula','Imagen\ncompleta'],
+                    boxprops=dict(color='black'),
+                    medianprops=dict(color='black'),
+                    whiskerprops=dict(color='black'),
+                    capprops=dict(color='black'),
+                    flierprops=dict(color='black'))
         plt.ylabel("AUC en validación")
-        plt.xticks(rotation=45, ha='right')
-        boxplot_path = os.path.join(model_dir, 'boxplot.png')
-        plt.savefig(boxplot_path, dpi=300, bbox_inches='tight')
+        plt.title(f"{model}: AUC (Wilcoxon p={p_two:.3f})")
+        plt.tight_layout()
+        plt.savefig(os.path.join(mdl_dir, 'boxplot.png'), dpi=300)
         plt.close()
 
 def main():

@@ -1,0 +1,17 @@
+=== LIME Explanation para FN (índice: 8) ===
+
+Clase real: 1
+Predicción del modelo: 0
+Probabilidades: [[0.50548437 0.49451563]]
+
+Importancia local de las features:
+  dwi_square_firstorder_Skewness > 0.14: 0.1324
+  dwi_log-sigma-2-mm-3D_firstorder_Kurtosis > 0.02: -0.1116
+  dwi_original_glrlm_GrayLevelNonUniformity > 0.39: 0.1099
+  dwi_log-sigma-3-mm-3D_firstorder_Skewness <= -0.31: 0.1088
+  dwi_original_firstorder_Kurtosis > -0.00: -0.1066
+  dwi_square_firstorder_Kurtosis > -0.07: -0.0977
+  dwi_square_glszm_SizeZoneNonUniformityNormalized <= -0.76: -0.0960
+  dwi_exponential_glcm_Imc1 > 1.38: -0.0778
+  dwi_square_glszm_SmallAreaEmphasis <= -0.61: 0.0672
+  dwi_wavelet2-LH_glcm_MCC > 0.50: -0.0653
