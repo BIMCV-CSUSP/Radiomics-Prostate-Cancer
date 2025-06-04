@@ -96,13 +96,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Compara el mejor modelo DL vs Radiomics (5 folds pareados)"
     )
-    parser.add_argument("--dl_dir",   default="../artifacts/deep_learning/gland/results/",
+    parser.add_argument("--dl_dir",   default="../../artifacts/deep_learning/gland/results/",
                         help="Carpeta con subcarpetas de resultados DL (CSV por fold)")
-    parser.add_argument("--radio_csv", default="../results/radiomics/most_discriminant/gland/resultados_features_all_gland_most_discriminant.csv",
+    parser.add_argument("--radio_csv", default="../../results/radiomics/most_discriminant/gland/resultados_features_all_gland_most_discriminant.csv",
                         help="CSV de resultados radiomics")
     parser.add_argument("--radio_model", default="Random Forest",
                         help="Nombre exacto del modelo radiomics (opcional)")
-    parser.add_argument("--outdir",   default="../results/compare_best_radiomics_dl",
+    parser.add_argument("--outdir",   default="../../results/compare_best_radiomics_dl",
                         help="Carpeta de salida")
     parser.add_argument("--alpha", type=float, default=0.05)
     args = parser.parse_args()
