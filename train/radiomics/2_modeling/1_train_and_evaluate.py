@@ -677,7 +677,6 @@ def main():
     ax_opt.plot([0, 1], [0, 1], linestyle='--', color='gray', label="_nolegend_")
     ax_opt.set_xlabel("False Positive Rate", fontsize=12, labelpad=10)
     ax_opt.set_ylabel("True Positive Rate", fontsize=12, labelpad=10)
-    ax_opt.set_title("Curvas ROC: Folds óptimos por modelo", fontsize=14)
     ax_opt.tick_params(axis='both', which='major', labelsize=10)
     ax_opt.legend(fontsize=10)
 
@@ -708,7 +707,6 @@ def main():
     ax_med.plot([0, 1], [0, 1], linestyle='--', color='gray', label="_nolegend_")
     ax_med.set_xlabel("False Positive Rate", fontsize=12, labelpad=10)
     ax_med.set_ylabel("True Positive Rate", fontsize=12, labelpad=10)
-    ax_med.set_title("Curvas ROC: Folds medianos por modelo", fontsize=14)
     ax_med.tick_params(axis='both', which='major', labelsize=10)
     ax_med.legend(fontsize=10)
 

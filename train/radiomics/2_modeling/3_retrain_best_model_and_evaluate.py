@@ -44,6 +44,7 @@ from sklearn.neighbors import KNeighborsClassifier
 
 # Herramientas para evaluación y calibración
 from sklearn.calibration import CalibratedClassifierCV, CalibrationDisplay
+from sklearn.metrics import brier_score_loss
 from sklearn.metrics import (
     roc_auc_score, matthews_corrcoef, cohen_kappa_score, f1_score,
     accuracy_score, recall_score, precision_score, balanced_accuracy_score,
@@ -357,7 +358,7 @@ def explain_lime_instance(
             elif rect.get_facecolor() == (1.0, 0.0, 0.0, 1.0):
                 rect.set_facecolor(neg_color)
         
-        plt.title(f"LIME Explanation - {instance_label} (index={index})")
+        # plt.title(f"LIME Explanation - {instance_label} (index={index})")
         plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
         plt.close(lime_fig)
     
@@ -550,7 +551,7 @@ def perform_lime_analysis(X_data, y_data, model_clf, preprocessor, lime_dir, sel
         )
         
         ax.axvline(0, color='black', linestyle='--')
-        ax.set_title(f"Distribución de pesos LIME - Top 15 features ({dataset_name}, Normalización Min-Max)")
+        # ax.set_title(f"Distribución de pesos LIME - Top 15 features ({dataset_name}, Normalización Min-Max)")
         
         norm = mpl.colors.Normalize(vmin=0, vmax=1)
         sm = mpl.cm.ScalarMappable(cmap=the_cmap, norm=norm)
@@ -582,7 +583,7 @@ def perform_lime_analysis(X_data, y_data, model_clf, preprocessor, lime_dir, sel
         )
         
         ax.axvline(0, color='black', linestyle='--')
-        ax.set_title(f"Distribución de pesos LIME - Top 15 features ({dataset_name}, Normalización Logarítmica)")
+        # ax.set_title(f"Distribución de pesos LIME - Top 15 features ({dataset_name}, Normalización Logarítmica)")
         
         norm = mpl.colors.Normalize(vmin=0, vmax=1)
         sm = mpl.cm.ScalarMappable(cmap=the_cmap, norm=norm)
@@ -639,7 +640,7 @@ def main():
                         help="Modelo a entrenar/optimizar.")
     parser.add_argument("--n_folds", type=int, default=5,
                         help="Número de folds para la validación cruzada en BayesSearchCV")
-    parser.add_argument("--variables", type=str, required=True,
+    parser.add_argument("--variables", type=str, default="../../../results/radiomics/most_discriminant/gland/variables_usadas.txt",
                         help="Ruta al archivo variables_usadas.txt con las variables a utilizar.")
     args = parser.parse_args()
     
@@ -869,7 +870,7 @@ def main():
         ax=ax,         
         cmap='cividis'
     )
-    ax.set_title(f"{selected_model} (NO calibrado)", fontsize=12)
+    # ax.set_title(f"{selected_model} (NO calibrado)", fontsize=12)
     
     n_classes = len(disp.display_labels)
     
@@ -951,7 +952,7 @@ def main():
             patch.set_edgecolor("black")
             patch.set_facecolor("black")
             
-    ax.set_title(f"Calibration Curve (pre), {selected_model}", fontsize=14)
+    # ax.set_title(f"Calibration Curve (pre), {selected_model}", fontsize=14)
     plt.savefig(calibration_fig_pre, dpi=dpi, bbox_inches='tight')
     plt.close()
     print(f"  --> Calibration curve (pre) guardada en: {calibration_fig_pre}")
@@ -967,7 +968,7 @@ def main():
         name=f"{selected_model}_post", 
         ax=ax
     )
-    ax.set_title(f"Calibration Curve (post), {selected_model}", fontsize=14)
+    # ax.set_title(f"Calibration Curve (post), {selected_model}", fontsize=14)
 
     for line in ax.get_lines():
         line.set_color("black")
@@ -985,7 +986,53 @@ def main():
     plt.savefig(calibration_fig_post, dpi=dpi, bbox_inches='tight')
     plt.close()
     print(f"  --> Calibration curve (post) guardada en: {calibration_fig_post}")
-    
+
+    # Métricas de calibración 
+    def calibration_error(y_true, y_prob, n_bins=10, norm='l1'):
+        y_true = np.asarray(y_true, dtype=np.float64)
+        y_prob = np.asarray(y_prob, dtype=np.float64)
+
+        if norm not in {"l1", "l2"}:
+            raise ValueError("norm must be 'l1' or 'l2'")
+
+        # 1. Asignar cada probabilidad a un bin
+        bins = np.linspace(0.0, 1.0, n_bins + 1)
+        bin_ids = np.digitize(y_prob, bins, right=True) - 1
+        bin_ids = np.clip(bin_ids, 0, n_bins - 1)      
+
+        # 2. Sumar error ponderado por el tamaño de cada bin
+        ece = 0.0
+        N = len(y_true)
+        for i in range(n_bins):
+            idx = bin_ids == i
+            if idx.any():
+                prob_avg = y_prob[idx].mean()
+                acc_avg  = y_true[idx].mean()
+                err_bin  = abs(prob_avg - acc_avg) if norm == "l1" else (prob_avg - acc_avg) ** 2
+                ece     += err_bin * idx.sum() / N
+
+        return ece
+
+    # 1) Probabilidades (sin / con Platt)
+    p_pre  = best_estimator.predict_proba(X_test)[:, 1]
+    p_post = cal_clf.predict_proba(X_test)[:, 1]
+
+    # 2) Expected Calibration Error (ECE)
+    ece_pre  = calibration_error(y_test, p_pre,  n_bins=10, norm='l1')
+    ece_post = calibration_error(y_test, p_post, n_bins=10, norm='l1')
+
+    # 3) Brier score
+    brier_pre  = brier_score_loss(y_test, p_pre)
+    brier_post = brier_score_loss(y_test, p_post)
+
+    # 4) Volcar resultados al informe
+    with open(report_path, "a", encoding="utf-8") as f_out:
+        f_out.write("=== Métricas de calibración ===\n")
+        f_out.write(f"  ECE  (pre):  {ece_pre:.3f}\n")
+        f_out.write(f"  ECE  (post): {ece_post:.3f}\n")
+        f_out.write(f"  Brier (pre): {brier_pre:.3f}\n")
+        f_out.write(f"  Brier (post): {brier_post:.3f}\n\n")
+
     # --- Ajuste de umbral para optimizar F1 ---
     thresholds = np.linspace(0.1, 0.9, 9)
     best_thresh = None
@@ -1047,7 +1094,7 @@ def main():
     
     disp_best = ConfusionMatrixDisplay(confusion_matrix=conf_matrix_best)
     disp_best.plot(ax=ax, cmap='cividis')
-    ax.set_title(f"{selected_model} (Calibrado, threshold={best_thresh:.2f})", fontsize=12)
+    # ax.set_title(f"{selected_model} (Calibrado, threshold={best_thresh:.2f})", fontsize=12)
     
     n_classes = conf_matrix_best.shape[0]
     

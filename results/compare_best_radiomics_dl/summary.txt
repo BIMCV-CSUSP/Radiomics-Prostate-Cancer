@@ -1,15 +1,15 @@
-DL best model  : config1
-Radiomics model: Random Forest
+DL predictions CSV : config1_predictions.csv
+Radiomics model    : Logistic Regression
 
-Fold-wise AUC
-  Fold 1  – DL: 0.825 | Rad: 0.834
-  Fold 2  – DL: 0.813 | Rad: 0.792
-  Fold 3  – DL: 0.789 | Rad: 0.785
-  Fold 4  – DL: 0.797 | Rad: 0.803
-  Fold 5  – DL: 0.830 | Rad: 0.850
+Fold-wise AUC (calculado desde las probabilidades)
+  Fold 1 – DL: 0.803 | Rad: 0.802
+  Fold 2 – DL: 0.719 | Rad: 0.794
+  Fold 3 – DL: 0.753 | Rad: 0.784
+  Fold 4 – DL: 0.770 | Rad: 0.799
+  Fold 5 – DL: 0.752 | Rad: 0.832
 
-Wilcoxon signed-rank : statistic=6.0000, p=8.1250e-01
-Cohen's d (pareado)  : -0.111  → pequeño
+Wilcoxon signed-rank : statistic=1.0000, p=1.2500e-01
+Cohen’s d (pareado)  : -1.227  → grande
 
 Conclusión:
   No se observa diferencia significativa con estos 5 folds.

@@ -1,8 +1,8 @@
 === SVM: glándula vs. imagen completa ===
 
-AUC (media ± sd)
-  • Glándula............. 0.8067 ± 0.0219
-  • Imagen completa...... 0.6312 ± 0.0356
+AUC (mediana [IQR])
+  • Glándula............. 0.8063 [0.0309]
+  • Imagen completa...... 0.6358 [0.0546]
 
 Test de Wilcoxon pareado (dos colas)
   W = 0.0000,  p = 1.7764e-15
@@ -12,4 +12,4 @@ Wilcoxon unilateral (H₁: glándula > full)
   p = 1.0000e+00
 
 Resumen:
-  El enfoque con mayor AUC medio es **glándula**.
+  El enfoque con mayor mediana de AUC es **glándula**.

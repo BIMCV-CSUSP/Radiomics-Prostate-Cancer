@@ -31,6 +31,12 @@ Mejores parámetros (según roc_auc): OrderedDict([('logisticregression__C', 0.2
 weighted avg       0.82      0.80      0.81       303
 
 
+=== Métricas de calibración ===
+  ECE  (pre):  0.149
+  ECE  (post): 0.090
+  Brier (pre): 0.162
+  Brier (post): 0.143
+
 === Ajuste de Umbral (Resultados con el mejor threshold) ===
 Resultados para cada threshold:
 Threshold: 0.10 - F1: 0.480

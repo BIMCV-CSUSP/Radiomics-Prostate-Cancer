@@ -66,7 +66,7 @@ def plot_pair(dl, rad, f_dl, f_rad, title, out,
     # Estética
     ax.set_xlabel("False Positive Rate", fontsize=12, labelpad=10)
     ax.set_ylabel("True Positive Rate", fontsize=12, labelpad=10)
-    ax.set_title(title, fontsize=14)
+    # ax.set_title(title, fontsize=14)
     ax.tick_params(axis="both", which="major", labelsize=10)
 
     # Leyenda y ajuste de grosor SOLO allí
@@ -87,7 +87,7 @@ def main():
                         help="CSV con predicciones del modelo DL")
     parser.add_argument("--radiomics_preds", type=Path, default="../../results/radiomics/most_discriminant/gland/preds_features_all_gland_most_discriminant.csv",
                         help="CSV 'preds_…csv' con predicciones Radiomics")
-    parser.add_argument("--radiomics_model", type=str, default="Random Forest",
+    parser.add_argument("--radiomics_model", type=str, default="Logistic Regression", # SVM
                         help="Nombre del clasificador dentro del CSV Radiomics")
     parser.add_argument("--outdir", type=Path, default=Path("../../results/compare_best_radiomics_dl/roc_comparison_plots"),
                         help="Directorio donde se guardarán las figuras")
@@ -110,23 +110,6 @@ def main():
               "Curvas ROC – Fold mediano"
               + (" (mismo fold)" if d_med==r_med else " (folds distintos)"),
               a.outdir / "roc_median_fold.png")
-
-    # ----- extras si difieren ------------------------------------------------
-    if d_best != r_best:
-        plot_pair(dl[r_best], rad[r_best], r_best, r_best,
-                  "Curvas ROC – Ambos métodos en el mejor fold de Radiomics",
-                  a.outdir / "roc_best_on_rad_fold.png")
-        plot_pair(dl[d_best], rad[d_best], d_best, d_best,
-                  "Curvas ROC – Ambos métodos en el mejor fold de DL",
-                  a.outdir / "roc_best_on_dl_fold.png")
-
-    if d_med != r_med:
-        plot_pair(dl[r_med], rad[r_med], r_med, r_med,
-                  "Curvas ROC – Ambos métodos en el fold mediano de Radiomics",
-                  a.outdir / "roc_median_on_rad_fold.png")
-        plot_pair(dl[d_med], rad[d_med], d_med, d_med,
-                  "Curvas ROC – Ambos métodos en el fold mediano de DL",
-                  a.outdir / "roc_median_on_dl_fold.png")
 
     print("\n✓ Figuras generadas en", a.outdir.resolve())
 

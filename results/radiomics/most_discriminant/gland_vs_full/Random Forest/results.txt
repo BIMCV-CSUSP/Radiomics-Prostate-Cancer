@@ -1,8 +1,8 @@
 === Random Forest: glándula vs. imagen completa ===
 
-AUC (media ± sd)
-  • Glándula............. 0.8090 ± 0.0221
-  • Imagen completa...... 0.6098 ± 0.0302
+AUC (mediana [IQR])
+  • Glándula............. 0.8086 [0.0308]
+  • Imagen completa...... 0.6083 [0.0396]
 
 Test de Wilcoxon pareado (dos colas)
   W = 0.0000,  p = 1.7764e-15
@@ -12,4 +12,4 @@ Wilcoxon unilateral (H₁: glándula > full)
   p = 1.0000e+00
 
 Resumen:
-  El enfoque con mayor AUC medio es **glándula**.
+  El enfoque con mayor mediana de AUC es **glándula**.

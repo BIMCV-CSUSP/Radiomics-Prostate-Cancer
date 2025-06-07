@@ -182,7 +182,6 @@ def main():
         capprops=capprops,
         flierprops=flierprops
     )
-    plt.title("Distribución del AUC en validación por clasificador")
     plt.ylabel("AUC en validación")
     plt.xticks(rotation=45, ha='right')
     
@@ -198,9 +197,7 @@ def main():
         
         # Crear mapa de calor con los p-values corregidos
         cax = ax.imshow(pairwise_matrix, interpolation='nearest', cmap='cividis', aspect='auto')
-    
-        ax.set_title("Matriz de p-values corregidos (Wilcoxon)")
-    
+        
         ax.set_xticks(np.arange(len(clfs)))
         ax.set_yticks(np.arange(len(clfs)))
         ax.set_xticklabels(clfs, rotation=45, ha="right")
