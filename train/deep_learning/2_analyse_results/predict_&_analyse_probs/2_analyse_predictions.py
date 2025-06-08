@@ -149,8 +149,12 @@ def perform_p_value_analysis(
                   capprops=dict(color='black'),
                   flierprops=dict(color='black'))
     
-    plt.title(f"Distribución de {metric_col} por modelo")
-    plt.ylabel(metric_col)
+    # plt.title(f"Distribución de {metric_col} por modelo")
+    ylabel_dict = {
+        'prob_class_1': 'Probabilidad de la clase positiva',
+        'prob_class_0': 'Probabilidad de la clase negativa'
+    }
+    plt.ylabel(ylabel_dict.get(metric_col, metric_col))
     plt.xticks(rotation=45, ha='right')
 
     # Guardar boxplot 

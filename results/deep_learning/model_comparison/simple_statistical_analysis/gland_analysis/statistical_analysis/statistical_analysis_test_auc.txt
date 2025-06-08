@@ -1,0 +1,173 @@
+=================================
+TEST DE FRIEDMAN para métrica: test_auc
+Estadístico: 43.7106, p-value: 3.4268e-05
+alpha = 0.05
+=> HAY diferencias estadísticamente significativas entre los modelos (rechazamos H0).
+=================================
+
+Resultados comparaciones 2 a 2 (Wilcoxon + corrección múltiple y cálculo de Cohen's d):
+    config1 vs config2: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.4347
+    config1 vs base-densenet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.4079
+    config1 vs config8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.3125
+    config1 vs base-resnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7357
+    config1 vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0424
+    config1 vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.9617
+    config1 vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.8997
+    config1 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.3093
+    config1 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.2904
+    config1 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0022
+    config1 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.2977
+    config1 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.3396
+    config1 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=8.4231
+    config2 vs base-densenet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=-0.1483
+    config2 vs config8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=-0.2870
+    config2 vs base-resnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.8749
+    config2 vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1440
+    config2 vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.5911
+    config2 vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.5328
+    config2 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1941
+    config2 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.5476
+    config2 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1127
+    config2 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.1010
+    config2 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.6904
+    config2 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=9.7998
+    base-densenet vs config8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=-0.1148
+    base-densenet vs base-resnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.5208
+    base-densenet vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0139
+    base-densenet vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1867
+    base-densenet vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.9432
+    base-densenet vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.9948
+    base-densenet vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.7944
+    base-densenet vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0112
+    base-densenet vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=4.2920
+    base-densenet vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.7313
+    base-densenet vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=9.3297
+    config8 vs base-resnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.6408
+    config8 vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.2332
+    config8 vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.0889
+    config8 vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.2289
+    config8 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.3640
+    config8 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.6113
+    config8 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1078
+    config8 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=4.7635
+    config8 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.9378
+    config8 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=8.7729
+    base-resnet vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.8039
+    base-resnet vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7920
+    base-resnet vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0049
+    base-resnet vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.6739
+    base-resnet vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.9816
+    base-resnet vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0690
+    base-resnet vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.5086
+    base-resnet vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.4100
+    base-resnet vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=6.4894
+    config7 vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.0827
+    config7 vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.1868
+    config7 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.2631
+    config7 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.3879
+    config7 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.9376
+    config7 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7448
+    config7 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.9934
+    config7 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.8346
+    config6 vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.1518
+    config6 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.1811
+    config6 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.3801
+    config6 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7661
+    config6 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0089
+    config6 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7947
+    config6 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.9110
+    config4 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.1176
+    config4 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.6558
+    config4 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.5405
+    config4 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.7767
+    config4 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7850
+    config4 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=9.7593
+    base-efficientnet-b7 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.2023
+    base-efficientnet-b7 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.4924
+    base-efficientnet-b7 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.5371
+    base-efficientnet-b7 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.4995
+    base-efficientnet-b7 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.0985
+    config5 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.3454
+    config5 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.3987
+    config5 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.5142
+    config5 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=5.1140
+    config3 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=-0.2960
+    config3 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=-0.1973
+    config3 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7146
+    base-efficientnet vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.2399
+    base-efficientnet vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=5.4989
+    base-efficientnet-b8 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.8225
+
+Comparaciones con diferencia significativa por p-value:
+    No se encontraron diferencias significativas por p-value en comparaciones 2 a 2.
+
+Comparaciones con diferencia significativa por Cohen's d:
+    config1 vs base-resnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7357 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0424 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.9617 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.8997 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.3093 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.2904 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0022 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.2977 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.3396 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config1 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=8.4231 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs base-resnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.8749 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1440 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.5911 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.5328 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1941 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.5476 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1127 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.1010 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.6904 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config2 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=9.7998 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs base-resnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.5208 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0139 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1867 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.9432 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.9948 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.7944 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0112 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=4.2920 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.7313 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-densenet vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=9.3297 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs base-resnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.6408 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.2332 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.0889 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.2289 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.3640 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.6113 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.1078 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=4.7635 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.9378 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config8 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=8.7729 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs config7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.8039 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs config6: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7920 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs config4: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0049 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs base-efficientnet-b7: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.6739 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.9816 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0690 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.5086 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.4100 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-resnet vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=6.4894 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config7 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.9376 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config7 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7448 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config7 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.9934 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config7 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.8346 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config6 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7661 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config6 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.0089 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config6 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7947 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config6 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.9110 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config4 vs config5: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.6558 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config4 vs config3: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.5405 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config4 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=1.7767 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config4 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7850 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config4 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=9.7593 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-efficientnet-b7 vs base-efficientnet: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.5371 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-efficientnet-b7 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=3.0985 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config5 vs base-efficientnet-b8: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.5142 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config5 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=5.1140 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    config3 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=0.7146 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-efficientnet vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=5.4989 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d
+    base-efficientnet-b8 vs base-vit: p-value (Wilcoxon, corregido)=1.0000e+00, Cohen's d=2.8225 => DIFERENCIA SIGNIFICATIVA POR COHEN'S d

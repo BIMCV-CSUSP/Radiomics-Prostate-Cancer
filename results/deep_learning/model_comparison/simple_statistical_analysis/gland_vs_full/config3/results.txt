@@ -1,16 +1,16 @@
 === Configuración: config3 ===
 
-val_auc (media ± sd)
-  • Glándula............. 0.6766 ± 0.0581
-  • Imagen completa...... 0.5397 ± 0.0408
+AUC (mediana [IQR])
+  • Glándula............. 0.6503 [0.1711]
+  • Imagen completa...... 0.5349 [0.0159]
 
 Test de Wilcoxon pareado (dos colas)
-  W = 0.0000,  p = 6.2500e-02
-Conclusión: no significativa  (α = 0.05)
+  W = 3.0000,  p = 3.1250e-01
+Conclusión: no significativa (α = 0.05)
 
 Wilcoxon unilateral (H₁: glándula > full)
-  p = 9.6875e-01
+  p = 1.5625e-01
 
-Cohen's d = 3.933  →  GRANDE
+Cohen's d = 0.496  →  PEQUEÑO
 
 Resumen: no se detectan diferencias significativas.

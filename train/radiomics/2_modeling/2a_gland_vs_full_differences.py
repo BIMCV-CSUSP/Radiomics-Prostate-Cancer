@@ -17,12 +17,10 @@ def one_sided_from_two_sided(stat, p_two, direction=+1):
     """Convierte un p‑valor bicaudal en unilateral."""
     return p_two / 2 if stat * direction > 0 else 1 - p_two / 2
 
-
 def iqr(arr):
     """Rango intercuartílico de un array NumPy."""
     q75, q25 = np.percentile(arr, [75, 25])
     return q75 - q25
-
 
 def compare_models(gland_csv: str, full_csv: str, outdir: str, alpha: float = 0.05):
     """Compara glándula vs. imagen completa para cada clasificador."""

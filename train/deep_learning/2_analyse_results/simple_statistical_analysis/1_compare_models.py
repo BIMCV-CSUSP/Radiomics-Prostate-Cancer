@@ -8,22 +8,17 @@ calculando tamaños de efecto (Cohen's d) y generando diversas visualizaciones
 para facilitar la interpretación de resultados.
 """
 
+
 import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-import json
-import re
-import ast
-from scipy import stats
 from scipy.stats import friedmanchisquare, wilcoxon
 from statsmodels.stats.multitest import multipletests
+from sklearn import metrics
 import argparse
-
-# Configuración para visualizaciones
-import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
 import scienceplots
@@ -31,127 +26,44 @@ import scienceplots
 plt.style.use(['science', 'grid'])
 dpi = 300
 
-def extract_model_name(path):
+def find_csv_files(folder_path):
     """
-    Extrae el nombre del modelo de la ruta de un directorio.
-    
-    Args:
-        path (str): Ruta al directorio del modelo
-        
-    Returns:
-        str: Nombre del modelo extraído
+    Devuelve una lista con la ruta completa de todos los archivos CSV en la carpeta indicada.
     """
-    return os.path.basename(path)
+    return [os.path.join(folder_path, f) for f in os.listdir(folder_path)
+            if f.endswith('.csv')]
 
-def read_results_folder(folder_path):
+def get_model_metrics_from_preds(csv_file):
     """
-    Lee todos los CSVs de resultados en una carpeta y los combina en un DataFrame.
-    
-    Busca archivos CSV con "split" en el nombre, extrae el número de split
-    del nombre del archivo, y añade el nombre del modelo como columna.
-    
-    Args:
-        folder_path (str): Ruta a la carpeta de resultados
-        
-    Returns:
-        pd.DataFrame: DataFrame con todos los resultados combinados o DataFrame vacío si no hay resultados
+    Calcula métricas por split a partir de CSV de predicciones con columnas:
+    split, true_label, prob_class_1
+    Devuelve un DataFrame con columnas: model, split, test_auc, test_f1, ...
     """
-    all_data = []
-    
-    # Verifica si la carpeta existe
-    if not os.path.exists(folder_path):
-        print(f"La carpeta {folder_path} no existe")
+    df = pd.read_csv(csv_file)
+    model_name = os.path.splitext(os.path.basename(csv_file))[0].replace('_predictions', '')
+    metrics_rows = []
+    if 'split' not in df.columns or 'true_label' not in df.columns or 'prob_class_1' not in df.columns:
+        print(f"Archivo {csv_file} no tiene columnas necesarias, ignorado.")
         return pd.DataFrame()
-    
-    # Busca todos los archivos CSV en la carpeta que contengan "split" en el nombre
-    csv_files = [f for f in os.listdir(folder_path) if f.endswith('.csv') and 'split' in f]
-    
-    if not csv_files:
-        print(f"No se encontraron archivos CSV en {folder_path}")
-        return pd.DataFrame()
-    
-    # Lee cada archivo CSV
-    for file in csv_files:
-        file_path = os.path.join(folder_path, file)
-        try:
-            df = pd.read_csv(file_path)
-            
-            # Extrae el número de split del nombre del archivo
-            split_match = re.search(r'split_(\d+)_results', file)
-            if split_match:
-                split_num = int(split_match.group(1))
-            else:
-                split_num = 0
-            
-            # Si el split no está en el dataframe, añádelo
-            if 'split' not in df.columns or pd.isna(df['split']).all():
-                df['split'] = split_num
-                
-            all_data.append(df)
-        except Exception as e:
-            print(f"Error al leer {file_path}: {e}")
-    
-    if not all_data:
-        return pd.DataFrame()
-    
-    # Concatena todos los DataFrames
-    combined_df = pd.concat(all_data, ignore_index=True)
-    
-    # Añade el nombre del modelo como columna
-    model_name = extract_model_name(folder_path)
-    combined_df['model'] = model_name
-    
-    return combined_df
-
-def find_results_folders(root_path):
-    """
-    Busca todas las carpetas de resultados que contengan archivos CSV.
-    
-    Recorre recursivamente el directorio raíz buscando carpetas que
-    contengan archivos CSV de resultados (con "split" en el nombre).
-    
-    Args:
-        root_path (str): Directorio raíz para la búsqueda
-        
-    Returns:
-        list: Lista de rutas a las carpetas de resultados encontradas
-    """
-    results_folders = []
-    
-    for root, dirs, files in os.walk(root_path):
-        # Busca carpetas con archivos CSV de resultados
-        if any(f.endswith('.csv') and 'split' in f for f in files):
-            results_folders.append(root)
-    
-    return results_folders
-
-def process_string_lists(df):
-    """
-    Procesa columnas que contienen listas almacenadas como strings.
-    
-    Convierte las listas almacenadas como strings de Python en listas reales,
-    y crea columnas separadas para cada elemento de la lista (para cada clase).
-    
-    Args:
-        df (pd.DataFrame): DataFrame con columnas que contienen listas como strings
-        
-    Returns:
-        pd.DataFrame: DataFrame procesado con nuevas columnas para cada clase
-    """
-    
-    # Columnas que contienen listas como strings
-    list_columns = ['per_class_precision', 'per_class_recall', 'per_class_f1', 'per_class_accuracy']
-    
-    for col in list_columns:
-        if col in df.columns:
-            # Convierte la cadena de texto a lista Python
-            df[col] = df[col].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
-            
-            # Crea columnas separadas para cada clase
-            for i in range(2):
-                df[f'{col}_class{i}'] = df[col].apply(lambda x: x[i] if isinstance(x, list) and len(x) > i else np.nan)
-    
-    return df
+    for split, part in df.groupby('split'):
+        y_true = part['true_label'].values
+        y_prob = part['prob_class_1'].values
+        y_pred = (y_prob >= 0.5).astype(int)
+        if len(np.unique(y_true)) < 2:
+            auc = np.nan  # No se puede calcular si sólo hay una clase
+        else:
+            auc = metrics.roc_auc_score(y_true, y_prob)
+        metrics_rows.append({
+            'model': model_name,
+            'split': int(split),
+            'test_auc': auc,
+            'test_f1': metrics.f1_score(y_true, y_pred),
+            'test_accuracy': metrics.accuracy_score(y_true, y_pred),
+            'test_balanced_accuracy': metrics.balanced_accuracy_score(y_true, y_pred),
+            'test_sensitivity': metrics.recall_score(y_true, y_pred, pos_label=1),
+            'test_specificity': metrics.recall_score(y_true, y_pred, pos_label=0)
+        })
+    return pd.DataFrame(metrics_rows)
 
 def plot_radar_chart(df, metrics, figsize=(10, 8), output_dir='plots'):
     """
@@ -194,7 +106,7 @@ def plot_radar_chart(df, metrics, figsize=(10, 8), output_dir='plots'):
     # Etiquetas y leyenda
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(metrics)
-    ax.set_title('Comparación de modelos: métricas principales')
+    # ax.set_title('Comparación de modelos: métricas principales')
     ax.legend(loc='upper right')
     
     plt.tight_layout()
@@ -382,8 +294,8 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
         capprops=capprops,
         flierprops=flierprops
     )
-    plt.title(f"Distribución de {metric_col} por modelo")
-    plt.ylabel(metric_col)
+    # plt.title(f"Distribución de {metric_col} por modelo")
+    plt.ylabel("AUC en validación")
     plt.xticks(rotation=45, ha='right')
     
     boxplot_path = os.path.join(output_dir, f"boxplot_{metric_col}.png")
@@ -398,7 +310,7 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
         ax.grid(False)
         cax = ax.imshow(pairwise_matrix, interpolation='nearest', cmap='cividis', aspect='auto')
     
-        ax.set_title("Matriz de p-values (Wilcoxon con corrección múltiple)")
+        # ax.set_title("Matriz de p-values (Wilcoxon con corrección múltiple)")
         ax.set_xticks(np.arange(len(models)))
         ax.set_yticks(np.arange(len(models)))
         ax.set_xticklabels(models, rotation=45, ha="right")
@@ -430,7 +342,7 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
         ax.grid(False)
         cax = ax.imshow(effect_size_matrix, interpolation='nearest', cmap='cividis', aspect='auto')
     
-        ax.set_title("Matriz de tamaño del efecto (Cohen's d)")
+        # ax.set_title("Matriz de tamaño del efecto (Cohen's d)")
         ax.set_xticks(np.arange(len(models)))
         ax.set_yticks(np.arange(len(models)))
         ax.set_xticklabels(models, rotation=45, ha="right")
@@ -457,175 +369,92 @@ def perform_statistical_analysis(best_results_df, metric_col, alpha=0.05, output
     return summary_text
 
 def analyze_results(root_path, output_base='results_analysis'):
-    """
-    Función principal que coordina todo el proceso de análisis de resultados.
-    
-    Esta función:
-    1. Encuentra carpetas con resultados
-    2. Combina todos los resultados en un DataFrame
-    3. Identifica el epoch con AUC óptimo para cada modelo/split
-    4. Realiza análisis estadístico comparativo (Friedman + Wilcoxon)
-    5. Genera visualizaciones (boxplots, heatmaps, gráficos de radar, etc.)
-    
-    Args:
-        root_path (str): Ruta raíz donde buscar carpetas de resultados
-        output_base (str, optional): Directorio base para guardar el análisis
-        
-    Returns:
-        None
-    """
-
     # Configura directorios de salida
     csv_dir = os.path.join(output_base, 'csv')
     stats_dir = os.path.join(output_base, 'statistical_analysis')
     plots_dir = os.path.join(output_base, 'general_plots')
-    
-    # Crea directorios si no existen
     for dir_path in [csv_dir, stats_dir, plots_dir]:
         os.makedirs(dir_path, exist_ok=True)
-    
-    # Busca carpetas con resultados
-    results_folders = find_results_folders(root_path)
-    
-    if not results_folders:
-        print(f"No se encontraron carpetas de resultados en {root_path}")
-        return
-    
-    print(f"Se encontraron {len(results_folders)} carpetas de resultados")
-    
-    ######################################
-    #      Concatenando resultados       #
-    ######################################
-    
-    all_results = []
-    for folder in results_folders:
-        model_results = read_results_folder(folder)
-        if not model_results.empty:
-            if 'model' not in model_results.columns:
-                model_name = extract_model_name(folder)
-                print(f"Añadiendo columna 'model' a resultados de {model_name}")
-                model_results['model'] = model_name
-            
-            all_results.append(model_results)
-    
-    if not all_results:
-        print("No se encontraron resultados en ninguna carpeta")
-        return
-    
-    # Combina todos los resultados en un único DataFrame
-    combined_results = pd.concat(all_results, ignore_index=True)
-    combined_results = process_string_lists(combined_results)
-    combined_results = pd.concat(all_results, ignore_index=True)
 
-    # Reorganiza columnas para poner 'model' primero (si existe)
-    if 'model' in combined_results.columns:
-        cols = combined_results.columns.tolist()
-        cols.remove('model')
-        combined_results = combined_results[['model'] + cols]
-    
-    # Guarda resultados combinados
+    # Lee los archivos CSV de predicciones
+    csv_files = find_csv_files(root_path)
+    if not csv_files:
+        print(f"No se encontraron archivos CSV en {root_path}")
+        return
+
+    print(f"Se encontraron {len(csv_files)} archivos CSV en {root_path}")
+    all_results = []
+    for file in csv_files:
+        model_metrics = get_model_metrics_from_preds(file)
+        if not model_metrics.empty:
+            all_results.append(model_metrics)
+    if not all_results:
+        print("No se encontraron resultados válidos en los CSVs")
+        return
+
+    combined_results = pd.concat(all_results, ignore_index=True)
     combined_results.to_csv(os.path.join(csv_dir, 'all_results_combined.csv'), index=False)
     print(f"Resultados combinados guardados en: {os.path.join(csv_dir, 'all_results_combined.csv')}")
-    
-    ######################################
-    #      Epoch con AUC óptimo          #
-    ######################################
-    
-    # Para cada modelo y split, encuentra la época con mejor AUC
-    optimal_results = []
-    for model in combined_results['model'].unique():
-        for split in combined_results[combined_results['model'] == model]['split'].unique():
-            model_split_data = combined_results[(combined_results['model'] == model) & 
-                                              (combined_results['split'] == split)]
-            
-            if 'val_auc' in model_split_data.columns:
-                # Encontrar el índice con el AUC máximo (óptimo)
-                optimal_idx = model_split_data['val_auc'].idxmax()
-                optimal_row = model_split_data.loc[optimal_idx].to_dict()
-                
-                optimal_row['model'] = model
-                optimal_row['split'] = split
-                
-                optimal_results.append(optimal_row)
-    
-    # Crea DataFrame con los resultados óptimos
-    optimal_results_df = pd.DataFrame(optimal_results)
 
-    # Guarda resultados óptimos
-    optimal_results_df.to_csv(os.path.join(csv_dir, 'optimal_auc_results.csv'), index=False)
-    print(f"Resultados con AUC óptimo guardados en: {os.path.join(csv_dir, 'optimal_auc_results.csv')}")
-    
     ########################################################
     #      Análisis estadístico (Friedman + Wilcoxon)      #
     ########################################################
 
-    # Realiza análisis estadístico para el AUC (si está disponible)
-    if 'val_auc' in optimal_results_df.columns:
+    if 'test_auc' in combined_results.columns:
         perform_statistical_analysis(
-            optimal_results_df,
-            'val_auc', 
-            alpha=0.05, 
+            combined_results,
+            'test_auc',
+            alpha=0.05,
             output_dir=stats_dir
         )
     else:
-        print("No se encontró la métrica val_auc para realizar análisis estadístico")
-    
+        print("No se encontró la métrica test_auc para realizar análisis estadístico")
+
     ##################################
     #      Gráficos adicionales      #
     ##################################
-    
-    # Define métricas a visualizar
     plot_metrics = [
-        'val_auc', 'val_f1_binary', 'val_accuracy', 
-        'val_balanced_accuracy', 'val_specificity', 'val_sensitivity',
+        'test_auc', 'test_f1', 'test_accuracy',
+        'test_balanced_accuracy', 'test_specificity', 'test_sensitivity',
     ]
-
-    # Filtra métricas disponibles
     existing_metrics = [m for m in plot_metrics if m in combined_results.columns]
     if not existing_metrics:
         print("No se encontraron métricas de validación en los datos")
         return
-    
+
     # Calcula estadísticas resumen por modelo
-    summary_stats = optimal_results_df.groupby('model')[existing_metrics].agg(['mean', 'std', 'min', 'max', 'median'])
+    summary_stats = combined_results.groupby('model')[existing_metrics].agg(['mean', 'std', 'min', 'max', 'median'])
     summary_stats.to_csv(os.path.join(csv_dir, 'model_summary_statistics.csv'))
     print(f"Estadísticas resumen guardadas en: {os.path.join(csv_dir, 'model_summary_statistics.csv')}")
-    
+
     # Gráfico de radar
     plot_radar_chart(
-        summary_stats, 
-        [m for m in existing_metrics], 
+        summary_stats,
+        [m for m in existing_metrics],
         output_dir=plots_dir
     )
     print(f"Gráfico de radar guardado en: {os.path.join(plots_dir, 'model_comparison_radar.png')}")
-    
+
     # Gráficos de barras para cada métrica
     plt.figure(figsize=(14, 10))
     for i, metric in enumerate(existing_metrics):
         plt.subplot(2, 3, i+1)
-        
-        # Calculamos la mediana y ordenamos los modelos en base a ella
-        median_values = optimal_results_df.groupby('model')[metric].median().sort_values(ascending=False)
+        median_values = combined_results.groupby('model')[metric].median().sort_values(ascending=False)
         ordered_models = median_values.index
-        
-        # Usamos barplot con la mediana como estimador y sin barras de error
         sns.barplot(
             x='model',
             y=metric,
-            data=optimal_results_df,
+            data=combined_results,
             order=ordered_models,
             estimator=np.median,
             errorbar=None
         )
-        
-        plt.title(f'Comparación de {metric}')
+        # plt.title(f'Comparación de {metric}')
         plt.xticks(rotation=45, ha='right')
-    
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'metrics_comparison_barplot.png'), dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Gráfico de barras comparativo guardado en: {os.path.join(plots_dir, 'metrics_comparison_barplot.png')}")
-    
     print("\nAnálisis completado exitosamente.")
 
 def main():
@@ -647,7 +476,7 @@ def main():
         help="Tipo de resultados a analizar: 'gland' o 'full'."
     )
     parser.add_argument(
-        "--data_root", type=str, default="../../../../artifacts/deep_learning",
+        "--data_root", type=str, default="../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/",
         help="Directorio raíz donde se ubican las carpetas de resultados."
     )
     parser.add_argument(
@@ -658,7 +487,7 @@ def main():
     args = parser.parse_args()
 
     # Construye las rutas específicas basadas en los argumentos
-    root_path = os.path.join(args.data_root, args.mode, "results")
+    root_path = os.path.join(args.data_root, f"{args.mode}_analysis", "predictions")
     output_dir = os.path.join(args.output_base, f"{args.mode}_analysis")
 
     # Ejecuta el análisis con las rutas especificadas

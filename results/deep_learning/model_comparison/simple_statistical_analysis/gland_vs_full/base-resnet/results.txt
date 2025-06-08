@@ -1,16 +1,16 @@
 === Configuración: base-resnet ===
 
-val_auc (media ± sd)
-  • Glándula............. 0.7708 ± 0.0186
-  • Imagen completa...... 0.6134 ± 0.0308
+AUC (mediana [IQR])
+  • Glándula............. 0.7297 [0.0338]
+  • Imagen completa...... 0.6019 [0.0318]
 
 Test de Wilcoxon pareado (dos colas)
   W = 0.0000,  p = 6.2500e-02
-Conclusión: no significativa  (α = 0.05)
+Conclusión: no significativa (α = 0.05)
 
 Wilcoxon unilateral (H₁: glándula > full)
   p = 9.6875e-01
 
-Cohen's d = 4.518  →  GRANDE
+Cohen's d = 2.064  →  GRANDE
 
 Resumen: no se detectan diferencias significativas.
