@@ -139,16 +139,25 @@ def main():
     print("✓ summary.txt guardado en", a.outdir.resolve())
 
     # 4.  Box-plot
+    dl_config_name = a.dl_preds_csv.stem.replace("_predictions", "")
+
+    auc_medians = [np.median(dl_auc), np.median(rad_auc)]
+    methods = [
+        (dl_auc, f"Deep Learning\n({dl_config_name})", auc_medians[0]),
+        (rad_auc, f"Radiómica\n({a.radiomics_model})", auc_medians[1]),
+    ]
+    # Orden descendente
+    methods.sort(key=lambda x: x[2], reverse=True)
+
     plt.figure(figsize=(6, 4))
-    plt.boxplot([dl_auc, rad_auc],
-                labels=["Deep Learning", f"Radiomics\n({a.radiomics_model})"],
+    plt.boxplot([x[0] for x in methods],
+                labels=[x[1] for x in methods],
                 boxprops=BOX_KW, medianprops=BOX_KW,
                 whiskerprops=BOX_KW, capprops=BOX_KW,
                 flierprops=dict(marker='o', markersize=4,
                                 markerfacecolor='gray',
                                 markeredgecolor='black', linestyle='none'))
     plt.ylabel("AUC")
-    plt.title("AUC en los 5 folds (predicciones)")
     plt.tight_layout()
     plt.savefig(a.outdir / "boxplot_auc.png", dpi=DPI, bbox_inches="tight")
     plt.close()

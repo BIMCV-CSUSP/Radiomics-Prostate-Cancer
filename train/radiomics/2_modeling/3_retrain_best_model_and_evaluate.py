@@ -1155,7 +1155,7 @@ def main():
             lime_dir=train_lime_dir,
             selected_features=selected_features,
             report_path=report_path,
-            shap_top_features=train_top_features,
+            # shap_top_features=train_top_features,
             dataset_name="entrenamiento"
         )
 
@@ -1169,7 +1169,7 @@ def main():
             lime_dir=test_lime_dir,
             selected_features=selected_features,
             report_path=report_path,
-            shap_top_features=test_top_features,
+            # shap_top_features=test_top_features,
             dataset_name="test"
         )
             

@@ -29,89 +29,120 @@ def load_dl(csv_path: Path):
     return {int(fid): (g["true_label"].values, g["prob_class_1"].values)
             for fid, g in df.groupby("split")}
 
-def select_folds(fold_dict):
-    aucs = {f: metrics.roc_auc_score(*fold_dict[f]) for f in fold_dict}
-    best = max(aucs, key=aucs.get)
-    median_val = np.median(list(aucs.values()))
-    median = min(aucs, key=lambda f: abs(aucs[f] - median_val))
-    return best, median, aucs
 
-def plot_pair(dl, rad, f_dl, f_rad, title, out,
-              lw_curve: float = 1.5,      # grosor en la gráfica
-              lw_legend: float = 2.5):    # grosor en la leyenda
+def compute_mean_roc(fold_dict: dict[int, tuple[np.ndarray, np.ndarray]],
+                     n_points: int = 100
+                    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     """
-    Dibuja dos curvas ROC (DL y Radiomics) dejando personalizar:
-        • lw_curve  → grosor de las curvas en el plot
-        • lw_legend → grosor de las líneas mostradas en la leyenda
+    Dado un dict fold → (y_true, y_prob),
+    devuelve:
+      - mean_fpr: grid uniforme de FPR en [0,1]
+      - mean_tpr: media de los TPR interpolados en mean_fpr
+      - std_tpr: desviación estándar de esos TPR
+      - mean_auc: media de las AUC foldwise
     """
+    tprs = []
+    aucs = []
+    mean_fpr = np.linspace(0, 1, n_points)
+
+    for y_true, y_prob in fold_dict.values():
+        fpr, tpr, _ = metrics.roc_curve(y_true, y_prob)
+        aucs.append(metrics.auc(fpr, tpr))
+        # interpola cada ROC al grid común
+        tprs.append(np.interp(mean_fpr, fpr, tpr))
+
+    tprs = np.vstack(tprs)
+    mean_tpr = tprs.mean(axis=0)
+    std_tpr = tprs.std(axis=0)
+    mean_auc = float(np.mean(aucs))
+    return mean_fpr, mean_tpr, std_tpr, mean_auc
+
+
+def plot_mean_roc(dl_dict, rad_dict, out_path: Path,
+                  lw_curve: float = 1.5, alpha_shading: float = 0.2):
+    """
+    Dibuja en un mismo panel las curvas ROC medias ± std
+    para Deep Learning y Radiomics, y ordena la leyenda según el valor de la AUC media.
+    """
+    # calcular medias y stds
+    fpr_dl, tpr_dl_mean, tpr_dl_std, auc_dl = compute_mean_roc(dl_dict)
+    fpr_r,  tpr_r_mean,  tpr_r_std,  auc_r  = compute_mean_roc(rad_dict)
+
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    # --- DL ---------------------------------------------------------------
-    fpr_dl, tpr_dl, _ = metrics.roc_curve(*dl)
-    auc_dl = metrics.auc(fpr_dl, tpr_dl)
-    ax.plot(fpr_dl, tpr_dl,
-            label=f"Deep Learning (fold={f_dl}, AUC={auc_dl:.3f})",
-            color=COLOR_DL, lw=lw_curve)
+    # Dibuja ambas curvas y guarda los handles/labels
+    handle_dl, = ax.plot(fpr_dl, tpr_dl_mean,
+                         label=f"config1 (AUC={auc_dl:.3f})",
+                         color=COLOR_DL, lw=lw_curve)
+    ax.fill_between(fpr_dl,
+                    np.maximum(0, tpr_dl_mean - tpr_dl_std),
+                    np.minimum(1, tpr_dl_mean + tpr_dl_std),
+                    color=COLOR_DL, alpha=alpha_shading)
+    handle_rad, = ax.plot(fpr_r, tpr_r_mean,
+                          label=f"Regresión Logística (AUC={auc_r:.3f})",
+                          color=COLOR_RAD, lw=lw_curve)
+    ax.fill_between(fpr_r,
+                    np.maximum(0, tpr_r_mean - tpr_r_std),
+                    np.minimum(1, tpr_r_mean + tpr_r_std),
+                    color=COLOR_RAD, alpha=alpha_shading)
 
-    # --- Radiomics --------------------------------------------------------
-    fpr_r, tpr_r, _ = metrics.roc_curve(*rad)
-    auc_r = metrics.auc(fpr_r, tpr_r)
-    ax.plot(fpr_r, tpr_r,
-            label=f"Radiomics (fold={f_rad}, AUC={auc_r:.3f})",
-            color=COLOR_RAD, lw=lw_curve)
+    # Línea de azar
+    ax.plot([0, 1], [0, 1], "--", color="gray", lw=1)
 
-    # Línea azar
-    ax.plot([0, 1], [0, 1], "--", color="gray", lw=1, label="_nolegend_")
-
-    # Estética
+    # Etiquetas
     ax.set_xlabel("False Positive Rate", fontsize=12, labelpad=10)
     ax.set_ylabel("True Positive Rate", fontsize=12, labelpad=10)
-    # ax.set_title(title, fontsize=14)
     ax.tick_params(axis="both", which="major", labelsize=10)
 
-    # Leyenda y ajuste de grosor SOLO allí
-    leg = ax.legend(fontsize=10)
+    # Ordenar la leyenda según la AUC media (de mayor a menor)
+    handles_labels_aucs = [
+        (handle_dl, f"config1 (AUC={auc_dl:.3f})", auc_dl),
+        (handle_rad, f"Regresión Logística (AUC={auc_r:.3f})", auc_r),
+    ]
+    # Orden descendente
+    handles_labels_aucs.sort(key=lambda x: x[2], reverse=True)
+
+    handles = [x[0] for x in handles_labels_aucs]
+    labels = [x[1] for x in handles_labels_aucs]
+
+    leg = ax.legend(handles, labels, fontsize=10)
     for leg_line in leg.get_lines():
-        leg_line.set_linewidth(lw_legend)
+        leg_line.set_linewidth(2.5)
 
     fig.tight_layout()
-    fig.savefig(out, dpi=DPI, bbox_inches="tight")
+    fig.savefig(out_path, dpi=DPI, bbox_inches="tight")
     plt.close(fig)
-    print(f"   ➜ gráfico guardado en: {out}")
+    print(f"   ➜ gráfico guardado en: {out_path}")
 
 # -------------------------------- main ----------------------------------- #
 def main():
     parser = argparse.ArgumentParser(
-        description="Comparar ROC entre DL y Radiomics usando predicciones en CSV")
+        description="Curvas ROC medias ± desviación para DL vs Radiomics")
     parser.add_argument("--dl_preds_csv", type=Path, default="../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions/config1_predictions.csv",
                         help="CSV con predicciones del modelo DL")
     parser.add_argument("--radiomics_preds", type=Path, default="../../results/radiomics/most_discriminant/gland/preds_features_all_gland_most_discriminant.csv",
                         help="CSV 'preds_…csv' con predicciones Radiomics")
     parser.add_argument("--radiomics_model", type=str, default="Logistic Regression", # SVM
                         help="Nombre del clasificador dentro del CSV Radiomics")
-    parser.add_argument("--outdir", type=Path, default=Path("../../results/compare_best_radiomics_dl/roc_comparison_plots"),
+    parser.add_argument("--outdir", type=Path, default=Path("../../results/compare_best_radiomics_dl"),
                         help="Directorio donde se guardarán las figuras")
-    a = parser.parse_args()
+    args  = parser.parse_args()
 
-    print(">> Radiomics"); rad = load_radiomics(a.radiomics_preds, a.radiomics_model)
-    r_best, r_med, r_auc = select_folds(rad); print("   AUC:", r_auc)
-    print("\n>> Deep Learning"); dl = load_dl(a.dl_preds_csv)
-    d_best, d_med, d_auc = select_folds(dl); print("   AUC:", d_auc)
+    args.outdir.mkdir(parents=True, exist_ok=True)
 
-    a.outdir.mkdir(parents=True, exist_ok=True)
+    print(">> Cargando Radiomics") 
+    rad = load_radiomics(args.radiomics_preds, args.radiomics_model)
+    print(f"   → {len(rad)} folds cargados")
 
-    # 1) Máx general
-    plot_pair(dl[d_best], rad[r_best], d_best, r_best,
-              "Curvas ROC – Fold con AUC máximo"
-              + (" (mismo fold)" if d_best==r_best else " (folds distintos)"),
-              a.outdir / "roc_max_fold.png")
-    # 2) Mediano general
-    plot_pair(dl[d_med], rad[r_med], d_med, r_med,
-              "Curvas ROC – Fold mediano"
-              + (" (mismo fold)" if d_med==r_med else " (folds distintos)"),
-              a.outdir / "roc_median_fold.png")
+    print(">> Cargando Deep Learning")
+    dl = load_dl(args.dl_preds_csv)
+    print(f"   → {len(dl)} folds cargados")
 
-    print("\n✓ Figuras generadas en", a.outdir.resolve())
+    args.outdir.mkdir(parents=True, exist_ok=True)
+    out_path = args.outdir / "roc_mean_comparison.png"
+
+    plot_mean_roc(dl, rad, out_path)
+    print("✓ Proceso completado, revisa la carpeta:", args.outdir.resolve())
 
 
 if __name__ == "__main__":
