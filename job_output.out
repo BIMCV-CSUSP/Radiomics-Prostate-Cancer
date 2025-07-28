@@ -1,0 +1,47 @@
+/clinicfs/projects/ceib/python_enviroments/radiomica/lib/python3.10/site-packages/radiomics/imageoperations.py:125: RuntimeWarning: overflow encountered in scalar add
+  highBound = maximum + 2 * binWidth
+
+=== Modalidad: IMAGE_T2 ===
+Firstorder:Range:
+  Media:   725.55
+  Mínimo:  448.19
+  Máximo:  2150.09
+
+Sugerencia de binWidth fija (fixed bin width):
+  → 16 bins ⇒ binWidth ≃ 45.35
+  → 32 bins ⇒ binWidth ≃ 22.67
+  → 64 bins ⇒ binWidth ≃ 11.34
+  → 128 bins ⇒ binWidth ≃ 5.67
+
+Freedman–Diaconis (FD) binWidth media: 7.49
+  (Regla FD: binWidth = 2·IQR / n^(1/3), donde IQR y n son del ROI)
+
+=== Modalidad: IMAGE_DWI ===
+Firstorder:Range:
+  Media:   2094.26
+  Mínimo:  453.67
+  Máximo:  10253.19
+
+Sugerencia de binWidth fija (fixed bin width):
+  → 16 bins ⇒ binWidth ≃ 130.89
+  → 32 bins ⇒ binWidth ≃ 65.45
+  → 64 bins ⇒ binWidth ≃ 32.72
+  → 128 bins ⇒ binWidth ≃ 16.36
+
+Freedman–Diaconis (FD) binWidth media: 1.05
+  (Regla FD: binWidth = 2·IQR / n^(1/3), donde IQR y n son del ROI)
+
+=== Modalidad: IMAGE_ADC ===
+Firstorder:Range:
+  Media:   7568.24
+  Mínimo:  1.17
+  Máximo:  47440.00
+
+Sugerencia de binWidth fija (fixed bin width):
+  → 16 bins ⇒ binWidth ≃ 473.01
+  → 32 bins ⇒ binWidth ≃ 236.51
+  → 64 bins ⇒ binWidth ≃ 118.25
+  → 128 bins ⇒ binWidth ≃ 59.13
+
+Freedman–Diaconis (FD) binWidth media: 23.31
+  (Regla FD: binWidth = 2·IQR / n^(1/3), donde IQR y n son del ROI)

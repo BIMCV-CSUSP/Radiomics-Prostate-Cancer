@@ -12,7 +12,7 @@ setting:
   # footprint and speed up applying the filters.
   preCrop: true
   interpolator: 'sitkBSpline'
-  resampledPixelSpacing: [1.85423755, 1.85423755, 0]
+  resampledPixelSpacing: [1.20, 1.20, 0]
 
   # Forced 2D extracion:
   # This allows to calculate texture features using anisotropic voxels (although it assumes that voxels are isotropic
@@ -36,7 +36,7 @@ setting:
   # The ideal number of bins is somewhere in the order of 16-128 bins. A possible way to define a good binwidt is to
   # extract firstorder:Range from the dataset to analyze, and choose a binwidth so, that range/binwidth remains approximately
   # in this range of bins.
-  binWidth: 61.27
+  binWidth: 23.31
 
   # Misc:
   # default label value. Labels can also be defined in the call to featureextractor.execute, as a commandline argument,
