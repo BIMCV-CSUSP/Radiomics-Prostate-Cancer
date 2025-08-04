@@ -14,6 +14,7 @@ from monai.transforms import (
     ConcatItemsd,
     SelectItemsd,
     MaskIntensityd, # ← Transformación adicional respecto a la versión "org"
+    SplitDimd
 )
 
 class MyDataLoader:
@@ -58,12 +59,12 @@ class MyDataLoader:
         # Procesar cada fila del CSV
         for _, row in df.iterrows():
             # Construir rutas completas a imágenes
-            t2_path = "../../../../" + row["t2w_path"]
-            adc_path = "../../../../" + row["adc_path"]
-            dwi_path = "../../../../" + row["hbv_path"]
+            t2_path =  row["t2w_path"]
+            adc_path =  row["adc_path"]
+            dwi_path =  row["hbv_path"]
 
             # Ruta a la máscara de la glándula prostática (diferencia clave con data_loader_org)
-            mask_path = "../../../../" + row["whole_gland_path"]
+            mask_path =  row["whole_gland_path"]
             
             # Convertir etiqueta a tensor one-hot
             label_value = int(row["case_csPCa"])
@@ -103,10 +104,15 @@ class MyDataLoader:
                 mode=("bilinear", "bilinear", "nearest")  
             ),
             
+            SplitDimd(
+                keys=["dwi"],
+                keepdim=True,
+            ),
+            
             # 3) Redimensionamos todas las imágenes y la máscara al tamaño deseado
             # Nota: La máscara usa interpolación "nearest" para mantener bordes nítidos
             Resized(
-                keys=["t2", "adc", "dwi", "mask"],
+                keys=["t2", "adc", "dwi_0", "mask"],
                 spatial_size=self.input_shape,
                 mode=("trilinear", "trilinear", "trilinear", "nearest")
             ),
@@ -114,16 +120,16 @@ class MyDataLoader:
             # 4) Aplicamos la máscara a cada modalidad (T2, ADC, DWI)
             # Esta es la principal diferencia: restringimos el análisis a la región prostática
             MaskIntensityd(
-                keys=["t2", "adc", "dwi"],
+                keys=["t2", "adc", "dwi_0"],
                 mask_key="mask",
                 select_fn=lambda x: x > 0.5  # Umbral para binarizar la máscara
             ),
             
             # 5) Normalizamos intensidades solo en la región enmascarada
-            ScaleIntensityd(keys=["t2", "adc", "dwi"], minv=0.0, maxv=1.0),
+            ScaleIntensityd(keys=["t2", "adc", "dwi_0"], minv=0.0, maxv=1.0),
             
             # 6) Concatenamos las tres modalidades en un único tensor
-            ConcatItemsd(keys=["t2", "adc", "dwi"], name="image", dim=0),
+            ConcatItemsd(keys=["t2", "adc", "dwi_0"], name="image", dim=0),
         ]
 
         # Transformaciones adicionales (aumentación de datos)

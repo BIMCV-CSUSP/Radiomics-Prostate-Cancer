@@ -113,7 +113,7 @@ def main():
     
     parser.add_argument("--csv_path", type=str, default="../../../artifacts/data.csv",
                         help="Ruta al CSV de datos.")
-    parser.add_argument("--input_shape", type=int, nargs=3, default=[128, 128, 32],
+    parser.add_argument("--input_shape", type=int, nargs=3, default=[256, 256, 32],
                         help="Dimensiones de la imagen de entrada.")
     parser.add_argument("--epochs", type=int, default=1,
                         help="Número de épocas de entrenamiento.")
