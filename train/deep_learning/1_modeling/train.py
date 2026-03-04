@@ -32,7 +32,8 @@ from sklearn.metrics import (roc_auc_score, f1_score, cohen_kappa_score, accurac
                              balanced_accuracy_score, recall_score, precision_score, matthews_corrcoef,
                              confusion_matrix)
 
-from monai.data import Dataset, DataLoader
+from monai.data import Dataset, DataLoader, CacheDataset, PersistentDataset
+from tqdm import tqdm
 
 import torch.multiprocessing as mp
 mp.set_sharing_strategy('file_system')
@@ -237,8 +238,15 @@ def main():
     
     # ================== Bucle de validación cruzada ==================
 
-    # Iteramos por cada split de validación cruzada
-    for split_index, (train_idx, val_idx) in enumerate(splitter.split(all_data, all_labels, groups=patient_ids), start=1):
+    # Iteramos por cada split de validación cruzada con progress bar
+    split_pbar = tqdm(enumerate(splitter.split(all_data, all_labels, groups=patient_ids), start=1), 
+                      total=n_splits, 
+                      desc="Cross-validation splits",
+                      position=0,
+                      leave=True)
+
+    for split_index, (train_idx, val_idx) in split_pbar:
+        split_pbar.set_description(f"Split {split_index}/{n_splits}")
         logger.info(f"=== Split {split_index}/{n_splits} ===")
 
         # Dividimos los datos en subconjuntos de entrenamiento y validación
@@ -272,13 +280,52 @@ def main():
         
         # ================== Creación de datasets y dataloaders ==================
 
-        # Creamos datasets con/sin aumentación de datos
-        train_dataset = Dataset(data=train_subset, transform=data_loader.get_transforms(augment=True))
-        val_dataset = Dataset(data=val_subset, transform=data_loader.get_transforms(augment=False))
+        dataset_type = config.get("data_args", {}).get("dataset_type", "regular")  # "regular", "cache", or "persistent"
+        
+        if dataset_type == "cache":
+            cache_rate = config.get("data_args", {}).get("cache_rate", 0.5)
+            train_dataset = CacheDataset(
+                data=train_subset, 
+                transform=data_loader.get_transforms(augment=True),
+                cache_rate=cache_rate,
+                num_workers=4
+            )
+            val_dataset = CacheDataset(
+                data=val_subset, 
+                transform=data_loader.get_transforms(augment=False),
+                cache_rate=cache_rate,
+                num_workers=4
+            )
+            logger.info(f"Using CacheDataset with cache_rate={cache_rate}")
+            
+        elif dataset_type == "persistent":
+            # Use PersistentDataset - caches to disk instead of RAM
+            cache_dir = os.path.join(base_dir, "persistent_cache", f"split_{split_index}")
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            train_dataset = PersistentDataset(
+                data=train_subset,
+                transform=data_loader.get_transforms(augment=True),
+                cache_dir=os.path.join(cache_dir, "train"),
+                pickle_protocol=2
+            )
+            val_dataset = PersistentDataset(
+                data=val_subset,
+                transform=data_loader.get_transforms(augment=False),
+                cache_dir=os.path.join(cache_dir, "val"),
+                pickle_protocol=2
+            )
+            logger.info(f"Using PersistentDataset with cache_dir={cache_dir}")
+            
+        else:
+            # Use regular Dataset
+            train_dataset = Dataset(data=train_subset, transform=data_loader.get_transforms(augment=True))
+            val_dataset = Dataset(data=val_subset, transform=data_loader.get_transforms(augment=False))
+            logger.info("Using regular Dataset")
 
         # Creamos dataloaders para alimentar los datos en lotes (batches)
-        train_loader = DataLoader(train_dataset, batch_size=2, num_workers=4, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=2, num_workers=4, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=32, num_workers=8, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=8, num_workers=0, shuffle=False, pin_memory=False, persistent_workers=False)
         
         # ================== Instanciación del modelo ==================
 
@@ -310,79 +357,98 @@ def main():
         split_results = []
 
         # Parámetros para early stopping
-        patience = 10
+        patience = 20
         no_improve_count = 0
         
         # ================== Bucle de entrenamiento (por época) ==================
 
-        for epoch in range(1, epochs + 1):
+        # Create epoch progress bar for this split
+        epoch_pbar = tqdm(range(epochs), 
+                          desc=f"Split {split_index}/{n_splits} - Epoch", 
+                          position=1,
+                          leave=False)
+
+        best_split_score = -np.inf
+        for epoch in epoch_pbar:
             # --- Fase de entrenamiento ---
             model.train()
             train_loss_accum = 0.0
-
-            preds_list = []
-            labels_list = []
-            train_probs = []  
-
-            # Iteramos por cada lote (batch) de entrenamiento
-            for batch in train_loader:
+            train_correct = 0
+            train_total = 0
+            train_preds = []
+            train_labels = []
+            train_probs = []
+            
+            # Create batch progress bar for this epoch
+            batch_pbar = tqdm(train_loader, 
+                              desc=f"Split {split_index}/{n_splits} - Epoch {epoch+1}/{epochs}", 
+                              position=1,
+                              leave=False)
+            
+            for batch_idx, batch in enumerate(batch_pbar):
+                # Process training batch (your existing training code)
                 inputs = batch["image"].to(device)
                 label_hot = batch["label"].to(device)
                 label_cls = torch.argmax(label_hot, dim=1)
 
+                # Forward pass
                 optimizer.zero_grad()
-
-                # Forward pass - calculamos predicciones
                 outputs = model(inputs)
-
-                # Algunos modelos pueden devolver múltiples outputs
                 if isinstance(outputs, (tuple, list)):
                     outputs = outputs[0]
-
-                # Calculamos pérdida
                 loss = criterion(outputs, label_cls)
-
-                # Backward pass - calculamos gradientes
                 loss.backward()
-                
-                # Actualización de pesos
                 optimizer.step()
 
-                # Acumulamos estadísticas
+                # Accumulate metrics - detach tensors to avoid gradient issues
                 train_loss_accum += loss.item()
-                preds_list.append(torch.argmax(outputs, dim=1).cpu())
-                labels_list.append(label_cls.cpu())
-
-                # Calculamos probabilidades con softmax para AUC
                 probs = torch.softmax(outputs, dim=1)
                 train_probs.append(probs[:, 1].detach().cpu())
+                train_preds.append(torch.argmax(outputs, dim=1).detach().cpu())
+                train_labels.append(label_cls.detach().cpu())
+                
+                # Update batch progress bar
+                current_train_loss = train_loss_accum / (batch_idx + 1)
+                
+                batch_pbar.set_postfix({
+                    'Loss': f'{current_train_loss:.4f}',
+                    'Batch': f'{batch_idx+1}/{len(train_loader)}'
+                })
             
-            # Procesamos estadísticas de entrenamiento acumuladas
+            # Close batch progress bar after epoch completes
+            batch_pbar.close()
+            
+            # Calculate final training metrics for this epoch
             train_loss = train_loss_accum / len(train_loader)
-            train_labels_np = torch.cat(labels_list).numpy()
-            train_preds_np = torch.cat(preds_list).numpy()
-            train_probs_np = torch.cat(train_probs).numpy()
             
-            # Calculamos AUC
+            train_labels_np = torch.cat(train_labels).numpy()
+            train_preds_np = torch.cat(train_preds).numpy()
+            train_probs_np = torch.cat(train_probs).numpy()
+
+            # Calculate training AUC
             try:
                 train_auc = roc_auc_score(train_labels_np, train_probs_np)
             except Exception as e:
-                logger.error(f"Error calculando AUC en train: {e}")
+                logger.error(f"Error calculando AUC en entrenamiento: {e}")
                 train_auc = np.nan
 
-            # Calculamos F1 score en entrenamiento
             train_f1 = f1_score(train_labels_np, train_preds_np, average='binary')
-            
-            # --- Fase de validación ---
+
+            # --- Validation phase ---
             model.eval()
             val_loss_accum = 0.0
             val_preds = []
             val_labels = []
-            val_probs = []  
+            val_probs = []
+
+            # Create batch progress bar for validation
+            val_batch_pbar = tqdm(val_loader, 
+                                desc=f"Split {split_index}/{n_splits} - Validation", 
+                                position=1,
+                                leave=False)
 
             with torch.no_grad():
-                for batch in val_loader:
-                    # Procesamos batch de validación (similar a entrenamiento)
+                for batch_idx, batch in enumerate(val_batch_pbar):
                     inputs = batch["image"].to(device)
                     label_hot = batch["label"].to(device)
                     label_cls = torch.argmax(label_hot, dim=1)
@@ -391,15 +457,28 @@ def main():
                     outputs = model(inputs)
                     if isinstance(outputs, (tuple, list)):
                         outputs = outputs[0]
-                    loss = criterion(outputs, label_cls)
-                    val_loss_accum += loss.item()
+                    val_loss = criterion(outputs, label_cls)
+
+                    # Accumulate metrics
+                    val_loss_accum += val_loss.item()
                     probs = torch.softmax(outputs, dim=1)
-                    val_probs.append(probs[:, 1].cpu())
-                    val_preds.append(torch.argmax(outputs, dim=1).cpu())
-                    val_labels.append(label_cls.cpu())
+                    val_probs.append(probs[:, 1].detach().cpu())
+                    val_preds.append(torch.argmax(outputs, dim=1).detach().cpu())
+                    val_labels.append(label_cls.detach().cpu())
+                    
+                    # Update validation progress bar
+                    current_val_loss = val_loss_accum / (batch_idx + 1)
+                    
+                    val_batch_pbar.set_postfix({
+                        'ValLoss': f'{current_val_loss:.4f}',
+                        'Batch': f'{batch_idx+1}/{len(val_loader)}'
+                    })
 
+            # Close validation progress bar
+            val_batch_pbar.close()
+
+            # Calculate final validation metrics
             val_loss = val_loss_accum / len(val_loader)
-
             val_labels_np = torch.cat(val_labels).numpy()
             val_preds_np = torch.cat(val_preds).numpy()
             val_probs_np = torch.cat(val_probs).numpy()
@@ -432,11 +511,21 @@ def main():
             cm = confusion_matrix(val_labels_np, val_preds_np)
             per_class_accuracy = (cm.diagonal() / cm.sum(axis=1)).tolist()
             
+            # Update epoch progress bar with key metrics
+            epoch_pbar.set_postfix({
+                'TrLoss': f'{train_loss:.3f}',
+                'TrAUC': f'{train_auc:.3f}',
+                'VLoss': f'{val_loss:.3f}',
+                'VAUC': f'{val_auc:.3f}',
+                'VMCC': f'{val_mcc:.3f}',
+                'VF1': f'{val_f1_binary:.3f}'
+            })
+            
             # ================== Registro de métricas ==================
 
             # Registramos métricas principales en el log
             logger.info(
-                f"Split {split_index}, Epoch [{epoch}/{epochs}] | "
+                f"Split {split_index}, Epoch [{epoch+1}/{epochs}] | "
                 f"Train Loss: {train_loss:.4f}, Train AUC: {train_auc:.4f}, Train F1: {train_f1:.4f} || "
                 f"Val Loss: {val_loss:.4f}, Val AUC: {val_auc:.4f}, Val MCC: {val_mcc:.4f}, Val Kappa: {val_kappa:.4f}, "
                 f"Val F1 (binary): {val_f1_binary:.4f}, Val F1 (macro): {val_f1_macro:.4f}, Val Accuracy: {val_accuracy:.4f}, "
@@ -447,7 +536,7 @@ def main():
             # Almacenamos todas las métricas calculadas en un diccionario
             split_results.append({
                 "split": split_index,
-                "epoch": epoch,
+                "epoch": epoch + 1,  # +1 for 1-based indexing in logs
                 "train_loss": train_loss,
                 "train_auc": train_auc,
                 "train_f1": train_f1,
@@ -469,6 +558,18 @@ def main():
                 "per_class_accuracy": per_class_accuracy
             })
             
+            # Update progress bar with current metrics
+            epoch_pbar.set_postfix({
+                'Train Loss': f'{train_loss:.4f}',
+                'Val Loss': f'{val_loss:.4f}',
+                'Val Metric': f'{val_auc:.4f}',
+                'Best': f'{best_split_score:.4f}'
+            })
+            
+            # Update best score if current epoch is better
+            if val_auc > best_split_score:
+                best_split_score = val_auc
+            
             # ================== Early stopping ==================
 
             # Comprobamos si hay mejora en AUC de validación
@@ -486,7 +587,21 @@ def main():
                 break
         
         # ================== Guardado de resultados y modelo por split ==================
-
+        # Delete dataset objects
+        del train_dataset
+        del val_dataset
+        del train_loader
+        del val_loader
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        # If using CUDA, clear GPU cache as well
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        logger.info(f"Memory cleared after split {split_index}")
         # Guardamos resultados de este split en CSV
         results_csv_path = os.path.join(results_dir, f"split_{split_index}_results.csv")
         pd.DataFrame(split_results).to_csv(results_csv_path, index=False)

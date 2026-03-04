@@ -54,6 +54,12 @@ class MyDataLoader:
 
         # Cargar el CSV con las rutas a las imágenes
         df = pd.read_csv(csv_path)
+        
+        df["t2w_path"] = df["t2w_path"].str.replace("/ceib", "")
+        df["adc_path"] = df["adc_path"].str.replace("/ceib", "")
+        df["hbv_path"] = df["hbv_path"].str.replace("/ceib", "")
+        df["whole_gland_path"] = df["whole_gland_path"].str.replace("/ceib", "")
+        
         all_data = []
 
         # Procesar cada fila del CSV

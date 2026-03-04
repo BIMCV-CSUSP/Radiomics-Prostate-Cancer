@@ -2,3 +2,5 @@
 /artifacts/radiomics/concatenated_data/features_all_full.csv
 /artifacts/radiomics/concatenated_data/features_all_gland.csv
 /artifacts/deep_learning/gland/models/
+/artifacts/deep_learning/gland/persistent_cache
+venv
