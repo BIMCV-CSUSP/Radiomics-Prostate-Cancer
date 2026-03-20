@@ -20,4 +20,4 @@ export PATH="/home/jaalzate/.local/bin:/usr/local/cuda-11.7/bin:$PATH"
 # jupyter lab --ip  '0.0.0.0' --port 8889
 
 # python data_analysis/z_get_binWidth/get_binwidth.py
-python train/radiomics/1_extract_radiomics/extract_radiomics.py
+python train/radiomics/1_extract_radiomics/extract_radiomics_optimized.py
