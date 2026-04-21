@@ -1,0 +1,6 @@
+2026-04-21 15:03:59,038 | INFO | Radiomics root: /clinicfs/userhomes/jaalzate/Projects/Radiomics-Prostate-Cancer/artifacts/radiomics
+2026-04-21 15:03:59,039 | INFO | Mode: gland
+2026-04-21 15:03:59,039 | INFO | Shape reference modality: t2
+2026-04-21 15:04:08,139 | INFO | Saved concatenated table to: /clinicfs/userhomes/jaalzate/Projects/Radiomics-Prostate-Cancer/artifacts/radiomics/concatenated_data/features_all_gland.csv
+2026-04-21 15:04:08,141 | INFO | Samples: 1500
+2026-04-21 15:04:08,141 | INFO | Feature columns: 4199
