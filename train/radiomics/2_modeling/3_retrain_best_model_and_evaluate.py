@@ -24,6 +24,12 @@ try:
     plt.style.use(['science', 'grid'])
 except ModuleNotFoundError:
     plt.style.use('default')
+
+# SciencePlots may request LaTeX rendering; disable it explicitly so the
+# scripts remain portable on cluster nodes without a TeX installation.
+mpl.rcParams["text.usetex"] = False
+plt.rcParams["text.usetex"] = False
+
 dpi = 300
 
 # Librerías para interpretabilidad

@@ -13,6 +13,7 @@ Key improvements in this version:
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import os
 import subprocess
@@ -67,6 +68,12 @@ try:
     plt.style.use(["science", "grid"])
 except ModuleNotFoundError:
     plt.style.use("default")
+
+# SciencePlots may enable TeX rendering on some systems. Force Matplotlib's
+# built-in text rendering so the pipeline works on clusters without LaTeX.
+mpl.rcParams["text.usetex"] = False
+plt.rcParams["text.usetex"] = False
+
 DPI = 300
 
 
@@ -97,6 +104,22 @@ def save_live_results_snapshot(df_results: pd.DataFrame, output_path: Path) -> N
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df_results.to_csv(output_path, index=False)
+
+
+def parse_serialized_list(value):
+    """Convert a CSV-stored Python-style list back into a Python list."""
+
+    if isinstance(value, list):
+        return value
+    if pd.isna(value) or value == "":
+        return []
+    if isinstance(value, str):
+        try:
+            parsed_value = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            return []
+        return parsed_value if isinstance(parsed_value, list) else []
+    return []
 
 
 def make_safe_slug(value: str) -> str:
@@ -1029,6 +1052,14 @@ def main():
             "Number of parallel workers to use during the automatic hold-out fine-tuning step."
         ),
     )
+    parser.add_argument(
+        "--postprocess_only",
+        action="store_true",
+        help=(
+            "Skip model training and resume from previously saved CSV outputs in the experiment "
+            "directory. Useful after plot-only or post-processing failures."
+        ),
+    )
     args = parser.parse_args()
 
     data_root = (PROJECT_ROOT / args.data_pre).resolve()
@@ -1058,191 +1089,232 @@ def main():
     mode = csv_stem.rsplit("_", 1)[-1]
     experiment_dir = base_dir / mode
     experiment_dir.mkdir(parents=True, exist_ok=True)
-
-    log_progress(f"Results directory: {experiment_dir}")
-    log_progress(f"Loaded {X.shape[0]} samples and {X.shape[1]} numeric features.")
-    log_progress(
-        f"Feature strategy: {args.feature_strategy} | "
-        f"n_splits={args.n_splits} | n_repeats={args.n_repeats} | "
-        f"bootstrap_iterations={args.bootstrap_iterations}"
-    )
-    log_progress(
-        "Feature selection settings: "
-        f"min_features={args.min_features}, max_features_cap={args.max_features_cap}, "
-        f"samples_per_feature={args.samples_per_feature}, "
-        f"minority_samples_per_feature={args.minority_samples_per_feature}, "
-        f"fdr_alpha={args.fdr_alpha}, correlation_threshold={args.correlation_threshold}, "
-        f"selection_n_jobs={args.selection_n_jobs}"
-    )
-
-    all_results = []
-    predictions_data = []
-    feature_selection_records = []
-    num_models = len(get_models(random_state=42))
-    live_results_path = experiment_dir / f"results_live_{csv_stem}_{args.feature_strategy}.csv"
-    log_progress(f"Live fold-metrics snapshot will be updated at: {live_results_path}")
-    log_progress("Precomputing grouped CV folds and training-only feature subsets for reuse across models...")
-    fold_plan, shared_selection_records = build_cv_fold_plan(
-        X=X,
-        y=y,
-        groups=groups,
-        n_splits=args.n_splits,
-        n_repeats=args.n_repeats,
-        base_random_state=42,
-        feature_strategy=args.feature_strategy,
-        min_features=args.min_features,
-        max_features_cap=args.max_features_cap,
-        samples_per_feature=args.samples_per_feature,
-        minority_samples_per_feature=args.minority_samples_per_feature,
-        fdr_alpha=args.fdr_alpha,
-        correlation_threshold=args.correlation_threshold,
-        selection_n_jobs=args.selection_n_jobs,
-    )
-    log_progress(
-        f"Prepared {len(fold_plan)} reusable folds. "
-        f"Average selected features per fold: "
-        f"{np.mean([len(item['selected_features']) for item in fold_plan]):.1f}"
-    )
-
-    for model_index, (model_name, model) in enumerate(get_models(random_state=42), start=1):
-        log_progress(f"Starting model {model_index}/{num_models}: {model_name}")
-
-        def on_fold_complete(**callback_payload):
-            accumulated_rows = list(all_results) + [
-                {**row, "Classifier": model_name} for row in callback_payload["all_fold_results"]
-            ]
-            live_df = pd.DataFrame(accumulated_rows)
-            save_live_results_snapshot(live_df, live_results_path)
-
-        fold_metrics, prediction_bundle = evaluate_model(
-            model=model,
-            classifier_name=model_name,
-            X=X,
-            y=y,
-            sample_ids=sample_ids,
-            patient_ids=patient_ids,
-            study_ids=study_ids,
-            fold_plan=fold_plan,
-            on_fold_complete=on_fold_complete,
-        )
-
-        for fold_metrics_row in fold_metrics:
-            fold_metrics_row["Classifier"] = model_name
-            all_results.append(fold_metrics_row)
-
-        predictions_data.append({"Classifier": model_name, "folds": prediction_bundle["folds"]})
-        for record in shared_selection_records:
-            feature_selection_records.append({**record, "Classifier": model_name})
-
-        model_results_df = pd.DataFrame(fold_metrics)
-        log_progress(
-            f"Completed model {model_index}/{num_models}: {model_name} | "
-            f"mean_val_auc={format_metric(model_results_df['val_auc'].mean())} | "
-            f"median_val_auc={format_metric(model_results_df['val_auc'].median())} | "
-            f"mean_val_bal_acc={format_metric(model_results_df['val_balanced_accuracy'].mean())}"
-        )
-
-    df_results = pd.DataFrame(all_results)
-    fixed_columns = ["Classifier", "Fold", "Repeat"]
-    other_columns = [column for column in df_results.columns if column not in fixed_columns]
-    df_results = df_results[fixed_columns + other_columns]
-    df_results.sort_values(by=["Classifier", "Fold"], inplace=True)
-
     results_filename = f"results_{csv_stem}_{args.feature_strategy}.csv"
     results_path = experiment_dir / results_filename
-    df_results.to_csv(results_path, index=False)
-    log_progress(f"Saved fold metrics to: {results_path}")
-
-    prediction_rows = []
-    for item in predictions_data:
-        classifier_name = item["Classifier"]
-        for fold_info in item["folds"]:
-            prediction_rows.append(
-                {
-                    "Classifier": classifier_name,
-                    "Fold": fold_info["fold_index"],
-                    "Repeat": fold_info["Repeat"],
-                    "sample_ids": fold_info["sample_ids"],
-                    "patient_ids": fold_info["patient_ids"],
-                    "study_ids": fold_info["study_ids"],
-                    "y_val": fold_info["y_val"].tolist(),
-                    "y_pred": fold_info["y_val_pred"].tolist(),
-                    "y_prob": fold_info["y_val_prob"].tolist() if fold_info["y_val_prob"] is not None else [],
-                    "selected_features": fold_info["selected_features"],
-                }
-            )
-
-    df_predictions = pd.DataFrame(prediction_rows)
     predictions_filename = f"predictions_{csv_stem}_{args.feature_strategy}.csv"
     predictions_path = experiment_dir / predictions_filename
-    df_predictions.to_csv(predictions_path, index=False)
-    log_progress(f"Saved fold predictions to: {predictions_path}")
-
-    flat_predictions_df = build_flat_prediction_table(predictions_data)
     flat_predictions_path = experiment_dir / f"oof_predictions_flat_{csv_stem}_{args.feature_strategy}.csv"
-    flat_predictions_df.to_csv(flat_predictions_path, index=False)
-    log_progress(f"Saved flat OOF predictions to: {flat_predictions_path}")
-
-    aggregated_predictions_df = aggregate_oof_predictions(
-        flat_predictions_df=flat_predictions_df,
-        threshold=args.classification_threshold,
-    )
     aggregated_predictions_path = (
         experiment_dir / f"oof_predictions_aggregated_{csv_stem}_{args.feature_strategy}.csv"
     )
-    aggregated_predictions_df.to_csv(aggregated_predictions_path, index=False)
-    log_progress(f"Saved aggregated OOF predictions to: {aggregated_predictions_path}")
 
-    if args.feature_strategy == "most_discriminant" and feature_selection_records:
-        feature_selection_dir = experiment_dir / "feature_selection"
-        feature_selection_dir.mkdir(parents=True, exist_ok=True)
-
-        selection_df = pd.DataFrame(feature_selection_records)
-        detailed_path = feature_selection_dir / "selected_features_by_fold.csv"
-        selection_df.to_csv(detailed_path, index=False)
-
-        summary_df = (
-            selection_df[selection_df["is_selected"]]
-            .groupby(["Classifier", "feature"])
-            .agg(
-                times_selected=("is_selected", "sum"),
-                mean_auc=("auc", "mean"),
-                mean_p_value=("p_value", "mean"),
-                mean_q_value=("q_value", "mean"),
+    log_progress(f"Results directory: {experiment_dir}")
+    if args.postprocess_only:
+        log_progress("Postprocess-only mode enabled. Loading saved outputs from disk...")
+        required_paths = [
+            results_path,
+            predictions_path,
+            flat_predictions_path,
+            aggregated_predictions_path,
+        ]
+        missing_paths = [path for path in required_paths if not path.exists()]
+        if missing_paths:
+            missing_text = "\n".join(f"  - {path}" for path in missing_paths)
+            raise FileNotFoundError(
+                "Postprocess-only mode requires previously saved outputs, but the following files "
+                f"are missing:\n{missing_text}"
             )
-            .reset_index()
-            .sort_values(by=["Classifier", "times_selected", "mean_auc"], ascending=[True, False, False])
+
+        df_results = pd.read_csv(results_path)
+        df_predictions = pd.read_csv(
+            predictions_path,
+            converters={
+                "sample_ids": parse_serialized_list,
+                "patient_ids": parse_serialized_list,
+                "study_ids": parse_serialized_list,
+                "y_val": parse_serialized_list,
+                "y_pred": parse_serialized_list,
+                "y_prob": parse_serialized_list,
+                "selected_features": parse_serialized_list,
+            },
         )
-        summary_path = feature_selection_dir / "feature_selection_frequency.csv"
-        summary_df.to_csv(summary_path, index=False)
-
-        top_features_path = feature_selection_dir / "top_selected_features.txt"
-        with top_features_path.open("w", encoding="utf-8") as file_handle:
-            for classifier_name, classifier_df in summary_df.groupby("Classifier"):
-                file_handle.write(f"{classifier_name}\n")
-                for _, row in classifier_df.head(20).iterrows():
-                    file_handle.write(
-                        f"  - {row['feature']} | selected {int(row['times_selected'])} times | "
-                        f"mean AUC={row['mean_auc']:.4f} | mean p-value={row['mean_p_value']:.4e} | "
-                        f"mean q-value={row['mean_q_value']:.4e}\n"
-                    )
-                file_handle.write("\n")
-
-        recommended_features_path = feature_selection_dir / "recommended_features_by_classifier.txt"
-        with recommended_features_path.open("w", encoding="utf-8") as file_handle:
-            for classifier_name, classifier_df in summary_df.groupby("Classifier"):
-                file_handle.write(f"{classifier_name}\n")
-                for feature_name in classifier_df.head(args.max_features_cap)["feature"].tolist():
-                    file_handle.write(f"{feature_name}\n")
-                file_handle.write("\n")
-
-        log_progress(f"Saved fold-wise feature selection details to: {feature_selection_dir}")
+        flat_predictions_df = pd.read_csv(
+            flat_predictions_path,
+            converters={"selected_features": parse_serialized_list},
+        )
+        aggregated_predictions_df = pd.read_csv(aggregated_predictions_path)
+        log_progress(
+            f"Loaded saved outputs | fold_metrics={len(df_results)} rows | "
+            f"fold_predictions={len(df_predictions)} rows | "
+            f"flat_oof={len(flat_predictions_df)} rows | "
+            f"aggregated_oof={len(aggregated_predictions_df)} rows"
+        )
     else:
-        variables_path = experiment_dir / "variables_used.txt"
-        with variables_path.open("w", encoding="utf-8") as file_handle:
-            for feature_name in X.columns:
-                file_handle.write(f"{feature_name}\n")
-        log_progress(f"Saved feature list to: {variables_path}")
+        log_progress(f"Loaded {X.shape[0]} samples and {X.shape[1]} numeric features.")
+        log_progress(
+            f"Feature strategy: {args.feature_strategy} | "
+            f"n_splits={args.n_splits} | n_repeats={args.n_repeats} | "
+            f"bootstrap_iterations={args.bootstrap_iterations}"
+        )
+        log_progress(
+            "Feature selection settings: "
+            f"min_features={args.min_features}, max_features_cap={args.max_features_cap}, "
+            f"samples_per_feature={args.samples_per_feature}, "
+            f"minority_samples_per_feature={args.minority_samples_per_feature}, "
+            f"fdr_alpha={args.fdr_alpha}, correlation_threshold={args.correlation_threshold}, "
+            f"selection_n_jobs={args.selection_n_jobs}"
+        )
+
+        all_results = []
+        predictions_data = []
+        feature_selection_records = []
+        num_models = len(get_models(random_state=42))
+        live_results_path = experiment_dir / f"results_live_{csv_stem}_{args.feature_strategy}.csv"
+        log_progress(f"Live fold-metrics snapshot will be updated at: {live_results_path}")
+        log_progress("Precomputing grouped CV folds and training-only feature subsets for reuse across models...")
+        fold_plan, shared_selection_records = build_cv_fold_plan(
+            X=X,
+            y=y,
+            groups=groups,
+            n_splits=args.n_splits,
+            n_repeats=args.n_repeats,
+            base_random_state=42,
+            feature_strategy=args.feature_strategy,
+            min_features=args.min_features,
+            max_features_cap=args.max_features_cap,
+            samples_per_feature=args.samples_per_feature,
+            minority_samples_per_feature=args.minority_samples_per_feature,
+            fdr_alpha=args.fdr_alpha,
+            correlation_threshold=args.correlation_threshold,
+            selection_n_jobs=args.selection_n_jobs,
+        )
+        log_progress(
+            f"Prepared {len(fold_plan)} reusable folds. "
+            f"Average selected features per fold: "
+            f"{np.mean([len(item['selected_features']) for item in fold_plan]):.1f}"
+        )
+
+        for model_index, (model_name, model) in enumerate(get_models(random_state=42), start=1):
+            log_progress(f"Starting model {model_index}/{num_models}: {model_name}")
+
+            def on_fold_complete(**callback_payload):
+                accumulated_rows = list(all_results) + [
+                    {**row, "Classifier": model_name} for row in callback_payload["all_fold_results"]
+                ]
+                live_df = pd.DataFrame(accumulated_rows)
+                save_live_results_snapshot(live_df, live_results_path)
+
+            fold_metrics, prediction_bundle = evaluate_model(
+                model=model,
+                classifier_name=model_name,
+                X=X,
+                y=y,
+                sample_ids=sample_ids,
+                patient_ids=patient_ids,
+                study_ids=study_ids,
+                fold_plan=fold_plan,
+                on_fold_complete=on_fold_complete,
+            )
+
+            for fold_metrics_row in fold_metrics:
+                fold_metrics_row["Classifier"] = model_name
+                all_results.append(fold_metrics_row)
+
+            predictions_data.append({"Classifier": model_name, "folds": prediction_bundle["folds"]})
+            for record in shared_selection_records:
+                feature_selection_records.append({**record, "Classifier": model_name})
+
+            model_results_df = pd.DataFrame(fold_metrics)
+            log_progress(
+                f"Completed model {model_index}/{num_models}: {model_name} | "
+                f"mean_val_auc={format_metric(model_results_df['val_auc'].mean())} | "
+                f"median_val_auc={format_metric(model_results_df['val_auc'].median())} | "
+                f"mean_val_bal_acc={format_metric(model_results_df['val_balanced_accuracy'].mean())}"
+            )
+
+        df_results = pd.DataFrame(all_results)
+        fixed_columns = ["Classifier", "Fold", "Repeat"]
+        other_columns = [column for column in df_results.columns if column not in fixed_columns]
+        df_results = df_results[fixed_columns + other_columns]
+        df_results.sort_values(by=["Classifier", "Fold"], inplace=True)
+
+        df_results.to_csv(results_path, index=False)
+        log_progress(f"Saved fold metrics to: {results_path}")
+
+        prediction_rows = []
+        for item in predictions_data:
+            classifier_name = item["Classifier"]
+            for fold_info in item["folds"]:
+                prediction_rows.append(
+                    {
+                        "Classifier": classifier_name,
+                        "Fold": fold_info["fold_index"],
+                        "Repeat": fold_info["Repeat"],
+                        "sample_ids": fold_info["sample_ids"],
+                        "patient_ids": fold_info["patient_ids"],
+                        "study_ids": fold_info["study_ids"],
+                        "y_val": fold_info["y_val"].tolist(),
+                        "y_pred": fold_info["y_val_pred"].tolist(),
+                        "y_prob": fold_info["y_val_prob"].tolist() if fold_info["y_val_prob"] is not None else [],
+                        "selected_features": fold_info["selected_features"],
+                    }
+                )
+
+        df_predictions = pd.DataFrame(prediction_rows)
+        df_predictions.to_csv(predictions_path, index=False)
+        log_progress(f"Saved fold predictions to: {predictions_path}")
+
+        flat_predictions_df = build_flat_prediction_table(predictions_data)
+        flat_predictions_df.to_csv(flat_predictions_path, index=False)
+        log_progress(f"Saved flat OOF predictions to: {flat_predictions_path}")
+
+        aggregated_predictions_df = aggregate_oof_predictions(
+            flat_predictions_df=flat_predictions_df,
+            threshold=args.classification_threshold,
+        )
+        aggregated_predictions_df.to_csv(aggregated_predictions_path, index=False)
+        log_progress(f"Saved aggregated OOF predictions to: {aggregated_predictions_path}")
+
+        if args.feature_strategy == "most_discriminant" and feature_selection_records:
+            feature_selection_dir = experiment_dir / "feature_selection"
+            feature_selection_dir.mkdir(parents=True, exist_ok=True)
+
+            selection_df = pd.DataFrame(feature_selection_records)
+            detailed_path = feature_selection_dir / "selected_features_by_fold.csv"
+            selection_df.to_csv(detailed_path, index=False)
+
+            summary_df = (
+                selection_df[selection_df["is_selected"]]
+                .groupby(["Classifier", "feature"])
+                .agg(
+                    times_selected=("is_selected", "sum"),
+                    mean_auc=("auc", "mean"),
+                    mean_p_value=("p_value", "mean"),
+                    mean_q_value=("q_value", "mean"),
+                )
+                .reset_index()
+                .sort_values(by=["Classifier", "times_selected", "mean_auc"], ascending=[True, False, False])
+            )
+            summary_path = feature_selection_dir / "feature_selection_frequency.csv"
+            summary_df.to_csv(summary_path, index=False)
+
+            top_features_path = feature_selection_dir / "top_selected_features.txt"
+            with top_features_path.open("w", encoding="utf-8") as file_handle:
+                for classifier_name, classifier_df in summary_df.groupby("Classifier"):
+                    file_handle.write(f"{classifier_name}\n")
+                    for _, row in classifier_df.head(20).iterrows():
+                        file_handle.write(
+                            f"  - {row['feature']} | selected {int(row['times_selected'])} times | "
+                            f"mean AUC={row['mean_auc']:.4f} | mean p-value={row['mean_p_value']:.4e} | "
+                            f"mean q-value={row['mean_q_value']:.4e}\n"
+                        )
+                    file_handle.write("\n")
+
+            recommended_features_path = feature_selection_dir / "recommended_features_by_classifier.txt"
+            with recommended_features_path.open("w", encoding="utf-8") as file_handle:
+                for classifier_name, classifier_df in summary_df.groupby("Classifier"):
+                    file_handle.write(f"{classifier_name}\n")
+                    for feature_name in classifier_df.head(args.max_features_cap)["feature"].tolist():
+                        file_handle.write(f"{feature_name}\n")
+                    file_handle.write("\n")
+
+            log_progress(f"Saved fold-wise feature selection details to: {feature_selection_dir}")
+        else:
+            variables_path = experiment_dir / "variables_used.txt"
+            with variables_path.open("w", encoding="utf-8") as file_handle:
+                for feature_name in X.columns:
+                    file_handle.write(f"{feature_name}\n")
+            log_progress(f"Saved feature list to: {variables_path}")
 
     roc_dir = experiment_dir / "roc_curves"
     save_roc_plots(df_results=df_results, df_predictions=df_predictions, roc_dir=roc_dir)
