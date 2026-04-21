@@ -1,39 +1,46 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Script para optimización y evaluación avanzada del mejor modelo.
-
-Este script realiza:
-1. Fine-tuning de hiperparámetros mediante búsqueda bayesiana
-2. Evaluación en un conjunto de test hold-out
-3. Calibración de probabilidades del modelo
-4. Análisis de interpretabilidad con SHAP y LIME
+Optimize, calibrate, and interpret the best radiomics model on a leakage-safe hold-out split.
 """
 
 import os
 import argparse
+import sys
 import numpy as np
 import pandas as pd
 import re
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
+from pathlib import Path
 
 import matplotlib as mpl
 mpl.use('Agg')
-import scienceplots
-plt.style.use(['science', 'grid'])
+try:
+    import scienceplots  # noqa: F401
+    plt.style.use(['science', 'grid'])
+except ModuleNotFoundError:
+    plt.style.use('default')
 dpi = 300
 
 # Librerías para interpretabilidad
-import shap
-from lime.lime_tabular import LimeTabularExplainer
+try:
+    import shap
+except ModuleNotFoundError:
+    shap = None
+
+try:
+    from lime.lime_tabular import LimeTabularExplainer
+except ModuleNotFoundError:
+    LimeTabularExplainer = None
 
 from copy import deepcopy
 from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import VarianceThreshold
+from sklearn.impute import SimpleImputer
 
 # Importación de clasificadores
 from sklearn.svm import SVC
@@ -48,12 +55,16 @@ from sklearn.metrics import brier_score_loss
 from sklearn.metrics import (
     roc_auc_score, matthews_corrcoef, cohen_kappa_score, f1_score,
     accuracy_score, recall_score, precision_score, balanced_accuracy_score,
-    confusion_matrix, ConfusionMatrixDisplay, classification_report
+    confusion_matrix, ConfusionMatrixDisplay, classification_report, roc_curve
 )
 
 # Optimización bayesiana de hiperparámetros
-from skopt import BayesSearchCV
-from skopt.space import Real, Integer, Categorical
+try:
+    from skopt import BayesSearchCV
+    from skopt.space import Real, Integer, Categorical
+except ModuleNotFoundError:
+    BayesSearchCV = None
+    Real = Integer = Categorical = None
 
 import joblib
 
@@ -62,38 +73,263 @@ from scipy.stats import mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from train.common.radiomics_utils import (
+    prepare_numeric_radiomics_matrix,
+    resolve_feature_table_path,
+    select_radiomics_features,
+)
+
+
+###########################
+#   BOOTSTRAP METRICS     #
+###########################
+
+def compute_binary_metrics_from_probabilities(y_true, y_prob, threshold=0.5):
+    """
+    Compute threshold-free and threshold-based binary classification metrics.
+    """
+    y_true = np.asarray(y_true).astype(int)
+    y_prob = np.asarray(y_prob, dtype=float)
+    y_pred = (y_prob >= threshold).astype(int)
+
+    auc_value = roc_auc_score(y_true, y_prob)
+    mcc_value = matthews_corrcoef(y_true, y_pred)
+    kappa_value = cohen_kappa_score(y_true, y_pred)
+    f1_value = f1_score(y_true, y_pred)
+    accuracy_value = accuracy_score(y_true, y_pred)
+    sensitivity_value = recall_score(y_true, y_pred, pos_label=1)
+    specificity_value = recall_score(y_true, y_pred, pos_label=0)
+    ppv_value = precision_score(y_true, y_pred, pos_label=1, zero_division=0)
+    npv_value = precision_score(y_true, y_pred, pos_label=0, zero_division=0)
+    balanced_accuracy_value = balanced_accuracy_score(y_true, y_pred)
+
+    return {
+        "auc": auc_value,
+        "mcc": mcc_value,
+        "kappa": kappa_value,
+        "f1": f1_value,
+        "accuracy": accuracy_value,
+        "sensitivity": sensitivity_value,
+        "specificity": specificity_value,
+        "ppv": ppv_value,
+        "npv": npv_value,
+        "balanced_accuracy": balanced_accuracy_value,
+    }
+
+
+def bootstrap_patient_level_confidence_intervals(
+    y_true,
+    y_prob,
+    patient_ids,
+    threshold=0.5,
+    n_bootstrap=1000,
+    ci_level=0.95,
+    seed=42,
+    n_roc_points=200,
+):
+    """
+    Estimate patient-level confidence intervals by stratified bootstrap resampling.
+    """
+    bootstrap_df = pd.DataFrame(
+        {
+            "patient_id": patient_ids,
+            "true_label": y_true,
+            "prob_class_1": y_prob,
+        }
+    )
+
+    patient_rows = {
+        patient_id: patient_df.copy()
+        for patient_id, patient_df in bootstrap_df.groupby("patient_id")
+    }
+    patient_labels = bootstrap_df.groupby("patient_id")["true_label"].agg(lambda values: int(values.iloc[0]))
+    patient_strata = {
+        class_label: patient_labels[patient_labels == class_label].index.to_numpy()
+        for class_label in sorted(patient_labels.unique())
+    }
+
+    point_metrics = compute_binary_metrics_from_probabilities(
+        y_true=y_true,
+        y_prob=y_prob,
+        threshold=threshold,
+    )
+    metric_samples = {metric_name: [] for metric_name in point_metrics}
+
+    mean_fpr = np.linspace(0.0, 1.0, n_roc_points)
+    tpr_samples = []
+    rng = np.random.default_rng(seed)
+
+    for _ in range(n_bootstrap):
+        sampled_frames = []
+        for _, class_patient_ids in patient_strata.items():
+            sampled_patient_ids = rng.choice(
+                class_patient_ids,
+                size=len(class_patient_ids),
+                replace=True,
+            )
+            for patient_id in sampled_patient_ids:
+                sampled_frames.append(patient_rows[patient_id])
+
+        sampled_df = pd.concat(sampled_frames, ignore_index=True)
+        if sampled_df["true_label"].nunique() < 2:
+            continue
+
+        sampled_metrics = compute_binary_metrics_from_probabilities(
+            y_true=sampled_df["true_label"].to_numpy(),
+            y_prob=sampled_df["prob_class_1"].to_numpy(),
+            threshold=threshold,
+        )
+        for metric_name, metric_value in sampled_metrics.items():
+            metric_samples[metric_name].append(metric_value)
+
+        fpr, tpr, _ = roc_curve(
+            sampled_df["true_label"].to_numpy(),
+            sampled_df["prob_class_1"].to_numpy(),
+            pos_label=1,
+        )
+        interpolated_tpr = np.interp(mean_fpr, fpr, tpr)
+        interpolated_tpr[0] = 0.0
+        interpolated_tpr[-1] = 1.0
+        tpr_samples.append(interpolated_tpr)
+
+    alpha = 1.0 - ci_level
+    ci_summary = {}
+    for metric_name, values in metric_samples.items():
+        ci_summary[metric_name] = {
+            "point_estimate": point_metrics[metric_name],
+            "ci_low": float(np.nanpercentile(values, 100 * (alpha / 2))) if values else np.nan,
+            "ci_high": float(np.nanpercentile(values, 100 * (1 - alpha / 2))) if values else np.nan,
+            "n_bootstrap_success": len(values),
+        }
+
+    point_fpr, point_tpr, _ = roc_curve(y_true, y_prob, pos_label=1)
+    tpr_matrix = np.vstack(tpr_samples) if tpr_samples else None
+    return {
+        "metrics": ci_summary,
+        "roc": {
+            "point_fpr": point_fpr,
+            "point_tpr": point_tpr,
+            "grid_fpr": mean_fpr,
+            "tpr_ci_low": np.nanpercentile(tpr_matrix, 100 * (alpha / 2), axis=0)
+            if tpr_matrix is not None
+            else None,
+            "tpr_ci_high": np.nanpercentile(tpr_matrix, 100 * (1 - alpha / 2), axis=0)
+            if tpr_matrix is not None
+            else None,
+        },
+    }
+
+
+def save_bootstrap_summary(ci_result, output_csv_path, setting_name):
+    """
+    Save bootstrap confidence interval summaries to CSV.
+    """
+    rows = []
+    for metric_name, payload in ci_result["metrics"].items():
+        rows.append(
+            {
+                "setting": setting_name,
+                "metric": metric_name,
+                "point_estimate": payload["point_estimate"],
+                "ci_low": payload["ci_low"],
+                "ci_high": payload["ci_high"],
+                "n_bootstrap_success": payload["n_bootstrap_success"],
+            }
+        )
+    pd.DataFrame(rows).to_csv(output_csv_path, index=False)
+
+
+def save_roc_with_confidence_band(ci_result, output_path, line_color="black", fill_alpha=0.20):
+    """
+    Save a ROC curve with bootstrap confidence bands.
+    """
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(
+        ci_result["roc"]["point_fpr"],
+        ci_result["roc"]["point_tpr"],
+        color=line_color,
+        linewidth=2.0,
+    )
+    if ci_result["roc"]["tpr_ci_low"] is not None and ci_result["roc"]["tpr_ci_high"] is not None:
+        ax.fill_between(
+            ci_result["roc"]["grid_fpr"],
+            ci_result["roc"]["tpr_ci_low"],
+            ci_result["roc"]["tpr_ci_high"],
+            color=line_color,
+            alpha=fill_alpha,
+        )
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray")
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.close()
+
+
 ###########################
 #         SHAP            #
 ###########################
 
-def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, report_path, dataset_name="conjunto"):
-    """
-    Realiza análisis SHAP sobre un conjunto de datos.
-    
-    Args:
-        X_data: Datos de características sin procesar
-        y_data: Etiquetas
-        model_clf: Clasificador final
-        preprocessor: Pipeline de preprocesamiento
-        shap_dir: Directorio donde guardar los resultados
-        dataset_name: Nombre del conjunto de datos (para etiquetar)
-    """
-    print(f"\nRealizando análisis SHAP para {dataset_name}...")
+
+def transform_with_feature_preprocessor(X_data, preprocessor):
+    """Apply the fitted non-classifier pipeline and recover transformed feature names."""
+
+    transformed = X_data.copy()
+    feature_names = pd.Index(X_data.columns)
+
+    for step_name, step in preprocessor.steps:
+        if isinstance(step, SimpleImputer):
+            transformed_array = step.transform(transformed)
+            transformed = pd.DataFrame(
+                transformed_array,
+                index=X_data.index,
+                columns=feature_names,
+            )
+        elif isinstance(step, StandardScaler):
+            transformed_array = step.transform(transformed)
+            transformed = pd.DataFrame(
+                transformed_array,
+                index=X_data.index,
+                columns=feature_names,
+            )
+        elif isinstance(step, VarianceThreshold):
+            support_mask = step.get_support()
+            feature_names = feature_names[support_mask]
+            transformed_array = step.transform(transformed)
+            transformed = pd.DataFrame(
+                transformed_array,
+                index=X_data.index,
+                columns=feature_names,
+            )
+        else:
+            transformed_array = step.transform(transformed)
+            transformed = pd.DataFrame(
+                transformed_array,
+                index=X_data.index,
+                columns=feature_names,
+            )
+
+    return transformed, feature_names
+
+def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, report_path, dataset_name="dataset"):
+    """Run SHAP analysis on a transformed radiomics dataset."""
+
+    print(f"\nRunning SHAP analysis for {dataset_name}...")
+    if shap is None:
+        with open(report_path, "a", encoding="utf-8") as f_out:
+            f_out.write(f"=== SHAP Analysis ({dataset_name}) ===\n")
+            f_out.write("SHAP is not installed in the current environment.\n\n")
+        print("SHAP is not installed; skipping this analysis.")
+        return False, None, None, None
     try:
-        # Aplicar StandardScaler conservando nombres de columnas
-        scaler = preprocessor.steps[0][1]
-        X_scaled = pd.DataFrame(scaler.transform(X_data),
-                            index=X_data.index,
-                            columns=X_data.columns)
-        
-        # Aplicar VarianceThreshold y recuperar columnas seleccionadas
-        vt = preprocessor.steps[1][1]
-        mask = vt.get_support()
-        selected_features = X_data.columns[mask]
-        X_transformed_array = vt.transform(X_scaled.values)
-        X_transformed = pd.DataFrame(X_transformed_array,
-                                    index=X_data.index,
-                                    columns=selected_features)
+        X_transformed, selected_features = transform_with_feature_preprocessor(
+            X_data=X_data,
+            preprocessor=preprocessor,
+        )
         
         # Seleccionar el explainer adecuado según el tipo de modelo
         if isinstance(model_clf, (RandomForestClassifier, GradientBoostingClassifier)):
@@ -123,7 +359,7 @@ def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, rep
         # --------------------------------------------------------------
         # PARTE 1: TEST ESTADÍSTICO entre valores SHAP y la clase
         # --------------------------------------------------------------
-        print(f" - Realizando test estadístico (Mann-Whitney U) para {dataset_name} con corrección Holm...")
+        print(f" - Running Mann-Whitney U tests with Holm correction for {dataset_name}...")
         
         # Construir DataFrame con valores SHAP
         shap_matrix = pd.DataFrame(
@@ -154,36 +390,39 @@ def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, rep
         # Generar reporte de resultados
         lines_output = []
         lines_output.append("=================================")
-        lines_output.append(f"TEST DE MANN-WHITNEY U (SHAP por feature) con corrección 'Holm' para {dataset_name}")
-        lines_output.append("Comparación: Clase 0 vs Clase 1")
+        lines_output.append(
+            f"MANN-WHITNEY U TEST (SHAP values per feature) with Holm correction for {dataset_name}"
+        )
+        lines_output.append("Comparison: Class 0 vs Class 1")
         lines_output.append(f"alpha = {alpha}")
-        lines_output.append(f"Features totales: {len(features_test)}") 
+        lines_output.append(f"Total features: {len(features_test)}")
         lines_output.append("=================================\n")
-        
-        lines_output.append(f"Resultados por feature (p-value crudo y corregido):")
+
+        lines_output.append("Per-feature results (raw and corrected p-values):")
         significant_feats = []
         
         # Procesar resultados para cada característica
         for feat, pval_raw, pval_corr, rej_bool in zip(features_test, pvalues_raw, pvals_corr, reject):
-            if rej_bool: # Diferencia significativa (rechazamos H0)
-                result_str = "=> DIFERENCIA SIGNIFICATIVA"
+            if rej_bool:
+                result_str = "=> SIGNIFICANT DIFFERENCE"
                 significant_feats.append((feat, pval_raw, pval_corr))
             else:
-                result_str = "=> sin diferencia significativa"
+                result_str = "=> no significant difference"
             
             lines_output.append(
-                f"    {feat}: p-value crudo={pval_raw:.4e}, p-value corregido={pval_corr:.4e} {result_str}"
+                f"    {feat}: raw p-value={pval_raw:.4e}, corrected p-value={pval_corr:.4e} {result_str}"
             )
-        # Resumen de características significativas
         lines_output.append("")
-        lines_output.append(f" Total comparaciones con diferencia significativa: {len(significant_feats)}. Comparaciones:")
+        lines_output.append(
+            f"Total comparisons with significant differences: {len(significant_feats)}."
+        )
         
         if not significant_feats:
-            lines_output.append("    No se encontraron diferencias significativas.")
+            lines_output.append("    No significant feature-level SHAP differences were found.")
         else:
             for feat, pval_raw, pval_corr in significant_feats:
                 lines_output.append(
-                    f"    {feat}: p-value crudo={pval_raw:.4e}, p-value corregido={pval_corr:.4e} => DIFERENCIA SIGNIFICATIVA"
+                    f"    {feat}: raw p-value={pval_raw:.4e}, corrected p-value={pval_corr:.4e} => SIGNIFICANT DIFFERENCE"
                 )
         
         lines_output.append("\n")
@@ -194,12 +433,12 @@ def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, rep
             for line in lines_output:
                 f_out.write(line + "\n")
         
-        print(f"  --> Test estadístico guardado en: {test_txt_path}")
+        print(f"  --> Statistical test results saved to: {test_txt_path}")
     
         # --------------------------------------------------------------
         # PARTE 2: HEATMAP (clase 0 primero, luego clase 1)
         # --------------------------------------------------------------
-        print(f" - Generando Heatmap con muestras ordenadas por clase para {dataset_name}...")
+        print(f" - Generating class-ordered SHAP heatmap for {dataset_name}...")
         # Ordenar instancias por clase para visualización
         idx_class0 = np.where(y_data == 0)[0]
         idx_class1 = np.where(y_data == 1)[0]
@@ -227,15 +466,15 @@ def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, rep
         mid_class1 = (split_position + len(idx_class1)/2) / n_total
         
         # Añadir etiquetas sobre la parte superior del heatmap
-        ax.text(mid_class0, 1.01, 'Clase 0', ha='center', va='bottom', transform=ax.transAxes)
-        ax.text(mid_class1, 1.01, 'Clase 1', ha='center', va='bottom', transform=ax.transAxes)
+        ax.text(mid_class0, 1.01, 'Class 0', ha='center', va='bottom', transform=ax.transAxes)
+        ax.text(mid_class1, 1.01, 'Class 1', ha='center', va='bottom', transform=ax.transAxes)
         
         # Guardar figura
         fig.set_size_inches(10, 6)
         plt.tight_layout()
         plt.savefig(heatmap_path, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"  --> Heatmap reordenado guardado en: {heatmap_path}")
+        print(f"  --> SHAP heatmap saved to: {heatmap_path}")
     
         # --------------
         # Beeswarm plot 
@@ -248,7 +487,7 @@ def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, rep
         plt.tight_layout()
         plt.savefig(shap_fig_path, dpi=dpi, bbox_inches='tight')
         plt.close()
-        print(f"  --> Beeswarm plot guardado en: {shap_fig_path}")
+        print(f"  --> SHAP beeswarm plot saved to: {shap_fig_path}")
     
         # --------------------------------------------------------------
         # Scatter plots de las top features
@@ -271,15 +510,15 @@ def perform_shap_analysis(X_data, y_data, model_clf, preprocessor, shap_dir, rep
             plt.savefig(scatter_fig_path, dpi=dpi, bbox_inches='tight')
             plt.close()
         
-        print(f"  --> Scatter plots de las variables más relevantes guardados en: {scatter_dir}")
+        print(f"  --> SHAP scatter plots saved to: {scatter_dir}")
         return True, selected_features, shap_values, top_features_shap
     
     except Exception as e:
         with open(report_path, "a", encoding="utf-8") as f_out:
             f_out.write(f"=== SHAP Analysis ({dataset_name}) ===\n")
-            f_out.write(" No se pudo generar SHAP (modelo no soportado o error):\n")
+            f_out.write("SHAP analysis could not be generated (unsupported model or runtime error):\n")
             f_out.write(f"  {repr(e)}\n\n")
-        print(f"Error en SHAP analysis para {dataset_name}:", e)
+        print(f"Error during SHAP analysis for {dataset_name}: {e}")
         return False, None, None, None
 
 
@@ -307,7 +546,7 @@ def explain_lime_instance(
     model_clf, 
     explainer, 
     lime_dir, 
-    instance_label="instancia"
+    instance_label="instance"
 ):
     """
     Genera y guarda explicación LIME para una instancia específica.
@@ -336,11 +575,11 @@ def explain_lime_instance(
     
     # Guardar explicación como texto
     with open(explanation_txt_path, "w", encoding="utf-8") as f:
-        f.write(f"=== LIME Explanation para {instance_label} (índice: {index}) ===\n\n")
-        f.write(f"Clase real: {y_true[index]}\n")
-        f.write(f"Predicción del modelo: {y_pred[index]}\n")
-        f.write(f"Probabilidades: {model_clf.predict_proba([X_data[index]])}\n\n")
-        f.write("Importancia local de las features:\n")
+        f.write(f"=== LIME explanation for {instance_label} (index: {index}) ===\n\n")
+        f.write(f"True class: {y_true[index]}\n")
+        f.write(f"Model prediction: {y_pred[index]}\n")
+        f.write(f"Predicted probabilities: {model_clf.predict_proba([X_data[index]])}\n\n")
+        f.write("Local feature importance:\n")
         for feat_info in exp.as_list():
             f.write("  {}: {:.4f}\n".format(feat_info[0], feat_info[1]))
     
@@ -362,9 +601,11 @@ def explain_lime_instance(
         plt.savefig(fig_path, dpi=dpi, bbox_inches='tight')
         plt.close(lime_fig)
     
-    print(f"  -> LIME para {instance_label} (índice {index}) guardado en:\n"
-          f"     {explanation_txt_path}\n"
-          f"     {fig_path}")
+    print(
+        f"  -> LIME for {instance_label} (index {index}) saved to:\n"
+        f"     {explanation_txt_path}\n"
+        f"     {fig_path}"
+    )
 
 
 def generate_lime_explanations_for_misclassifications(
@@ -406,7 +647,7 @@ def generate_lime_explanations_for_misclassifications(
                 instance_label=label
             )
         else:
-            print(f"No hay instancias para {label}.")
+            print(f"No instances found for {label}.")
     
     # Generar explicaciones para cada categoría
     explain_first_if_any(tn_indices, "TN")
@@ -415,29 +656,37 @@ def generate_lime_explanations_for_misclassifications(
     explain_first_if_any(fn_indices, "FN")
 
 
-def perform_lime_analysis(X_data, y_data, model_clf, preprocessor, lime_dir, selected_features, report_path, shap_top_features=None, dataset_name="conjunto"):
-    """
-    Realiza análisis LIME sobre un conjunto de datos.
-    
-    Args:
-        X_data: Datos de características sin procesar
-        y_data: Etiquetas 
-        model_clf: Clasificador final
-        preprocessor: Pipeline de preprocesamiento
-        lime_dir: Directorio donde guardar los resultados
-        selected_features: Lista de características seleccionadas
-        shap_top_features: Top features según SHAP (opcional, para ordenamiento consistente)
-        dataset_name: Nombre del conjunto de datos (para etiquetar)
-    """
-    print(f"\nRealizando análisis LIME para {dataset_name}...")
+def perform_lime_analysis(
+    X_data,
+    y_data,
+    model_clf,
+    preprocessor,
+    lime_dir,
+    selected_features,
+    report_path,
+    shap_top_features=None,
+    dataset_name="dataset",
+):
+    """Run LIME analysis on a transformed radiomics dataset."""
+
+    print(f"\nRunning LIME analysis for {dataset_name}...")
+    if LimeTabularExplainer is None:
+        with open(report_path, "a", encoding="utf-8") as f_out:
+            f_out.write(f"=== LIME Analysis ({dataset_name}) ===\n")
+            f_out.write("LIME is not installed in the current environment.\n\n")
+        print("LIME is not installed; skipping this analysis.")
+        return False
     try:
-        # Preprocesar datos
-        X_lime = preprocessor.transform(X_data)
+        X_lime_df, transformed_features = transform_with_feature_preprocessor(
+            X_data=X_data,
+            preprocessor=preprocessor,
+        )
+        X_lime = X_lime_df.to_numpy()
+        transformed_feature_index = pd.Index(transformed_features)
         
-        # Configurar explainer LIME
         explainer_lime = LimeTabularExplainer(
             training_data=X_lime,
-            feature_names=selected_features,
+            feature_names=transformed_feature_index.tolist(),
             class_names=["0", "1"],
             discretize_continuous=True,
             random_state=42
@@ -458,7 +707,7 @@ def perform_lime_analysis(X_data, y_data, model_clf, preprocessor, lime_dir, sel
             # Procesar cada característica y su importancia
             for (feat_str, peso) in lime_list:
                 feature_name = extraer_nombre(feat_str) 
-                col_idx = selected_features.get_loc(feature_name)
+                col_idx = transformed_feature_index.get_loc(feature_name)
                 valor_feature = X_lime[i, col_idx]
                 
                 # Almacenar resultados
@@ -597,8 +846,8 @@ def perform_lime_analysis(X_data, y_data, model_clf, preprocessor, lime_dir, sel
         plt.savefig(fig_path_log, dpi=dpi, bbox_inches='tight')
         plt.close()
         
-        print(f"  --> Visualización LIME (normalización min-max) guardada en: {fig_path}")
-        print(f"  --> Visualización LIME (normalización logarítmica) guardada en: {fig_path_log}")
+        print(f"  --> LIME min-max visualization saved to: {fig_path}")
+        print(f"  --> LIME log-normalized visualization saved to: {fig_path_log}")
         
         # --- Explicaciones locales para casos específicos ---
         ind_lime_dir = os.path.join(lime_dir, "individual_analysis")
@@ -618,41 +867,156 @@ def perform_lime_analysis(X_data, y_data, model_clf, preprocessor, lime_dir, sel
     except Exception as e:
         with open(report_path, "a", encoding="utf-8") as f_out:
             f_out.write(f"\n=== LIME Analysis ({dataset_name}) ===\n")
-            f_out.write("No se pudo generar LIME (modelo no soportado o error):\n")
+            f_out.write("LIME analysis could not be generated (unsupported model or runtime error):\n")
             f_out.write(f"  {repr(e)}\n\n")
-        print(f"Error en LIME analysis para {dataset_name}:", e)
+        print(f"Error during LIME analysis for {dataset_name}: {e}")
         return False
 
 def main():
-    """
-    Función principal para el fine-tuning, evaluación e interpretación del mejor modelo.
-    """
-    # --- Configuración inicial y argumentos de línea de comandos ---
-    parser = argparse.ArgumentParser(
-        description="Entrena y afina un modelo utilizando un conjunto de test hold-out definitivo y validación cruzada en el resto de los datos. Luego calibra el modelo y aplica SHAP si es posible."
-    )
-    parser.add_argument("--csv", type=str, default="features_all_gland.csv",
-                        choices=["features_all_gland.csv", "features_all_full.csv"],
-                        help="Ruta al CSV con las características (por defecto 'features_all_gland.csv').")
-    parser.add_argument("--model", type=str, required=True,
-                        choices=["SVM", "LogisticRegression", "RandomForest", 
-                                 "NaiveBayes", "KNN", "GradientBoosting"],
-                        help="Modelo a entrenar/optimizar.")
-    parser.add_argument("--n_folds", type=int, default=5,
-                        help="Número de folds para la validación cruzada en BayesSearchCV")
-    parser.add_argument("--variables", type=str, default="../../../results/radiomics/most_discriminant/gland/variables_usadas.txt",
-                        help="Ruta al archivo variables_usadas.txt con las variables a utilizar.")
-    args = parser.parse_args()
-    
-    print("\nIniciando fine-tuning del modelo.")
-    print(f"  --> Modelo seleccionado: {args.model}")
-    print(f"  --> CSV utilizado: {args.csv}")
-    print(f"  --> Archivo de variables: {args.variables}")
+    """Run leakage-safe hold-out optimization, calibration, and interpretability analysis."""
 
-    # Configuración de rutas y directorios de salida
-    selected_model = args.model
-    base_dir = os.path.dirname(os.path.abspath(args.variables))
-    output_parent_dir = os.path.join(base_dir, "best_results")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Train and optimize a radiomics model with a final grouped hold-out test split, "
+            "probability calibration, and interpretability outputs."
+        )
+    )
+    parser.add_argument(
+        "--csv",
+        type=str,
+        default="features_all_gland.csv",
+        help="Feature table path or filename. Relative names are resolved inside the radiomics data root.",
+    )
+    parser.add_argument(
+        "--data_pre",
+        type=str,
+        default="artifacts/radiomics",
+        help="Directory containing the concatenated radiomics feature tables.",
+    )
+    parser.add_argument(
+        "--results_base",
+        type=str,
+        default="results/radiomics",
+        help="Base directory where hold-out outputs will be written.",
+    )
+    parser.add_argument(
+        "--feature_strategy",
+        type=str,
+        default="most_discriminant",
+        help="Label used to organize the output directory structure.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        choices=[
+            "SVM",
+            "SVC",
+            "LogisticRegression",
+            "RandomForest",
+            "NaiveBayes",
+            "GaussianNB",
+            "KNN",
+            "GradientBoosting",
+        ],
+        help="Classifier to optimize on the training split.",
+    )
+    parser.add_argument(
+        "--n_folds",
+        type=int,
+        default=5,
+        help="Number of grouped CV folds used inside BayesSearchCV.",
+    )
+    parser.add_argument(
+        "--variables",
+        type=str,
+        default=None,
+        help=(
+            "Optional external feature allowlist. Leave unset for a fully leakage-safe run that selects "
+            "features from the training split only."
+        ),
+    )
+    parser.add_argument(
+        "--bootstrap_iterations",
+        type=int,
+        default=1000,
+        help="Number of bootstrap iterations used for test-set confidence intervals.",
+    )
+    parser.add_argument(
+        "--ci_level",
+        type=float,
+        default=0.95,
+        help="Confidence level used for bootstrap confidence intervals.",
+    )
+    parser.add_argument(
+        "--min_features",
+        type=int,
+        default=10,
+        help="Minimum number of radiomics features retained after training-only selection.",
+    )
+    parser.add_argument(
+        "--max_features_cap",
+        type=int,
+        default=60,
+        help="Upper cap for the automatically inferred number of retained radiomics features.",
+    )
+    parser.add_argument(
+        "--samples_per_feature",
+        type=int,
+        default=25,
+        help="Target number of training samples per retained feature used to infer the feature cap.",
+    )
+    parser.add_argument(
+        "--minority_samples_per_feature",
+        type=int,
+        default=8,
+        help="Target number of minority-class samples per retained feature used to infer the feature cap.",
+    )
+    parser.add_argument(
+        "--fdr_alpha",
+        type=float,
+        default=0.05,
+        help="False-discovery-rate alpha used before correlation pruning.",
+    )
+    parser.add_argument(
+        "--correlation_threshold",
+        type=float,
+        default=0.90,
+        help="Absolute Pearson-correlation threshold used to prune redundant features.",
+    )
+    args = parser.parse_args()
+    ci_percent = int(args.ci_level * 100)
+
+    if BayesSearchCV is None:
+        raise ModuleNotFoundError(
+            "scikit-optimize is required to run this script. Install 'scikit-optimize' to continue."
+        )
+    
+    model_aliases = {
+        "SVC": "SVM",
+        "GaussianNB": "NaiveBayes",
+    }
+    selected_model = model_aliases.get(args.model, args.model)
+
+    data_root = (PROJECT_ROOT / args.data_pre).resolve()
+    data_path = resolve_feature_table_path(
+        project_root=PROJECT_ROOT,
+        data_root=data_root,
+        csv_argument=args.csv,
+    )
+    csv_stem = Path(data_path).stem
+    mode = csv_stem.rsplit("_", 1)[-1]
+
+    print("\nStarting final hold-out optimization.")
+    print(f"  --> Selected model: {selected_model}")
+    print(f"  --> Feature table: {data_path}")
+    if args.variables:
+        print(f"  --> External feature allowlist: {args.variables}")
+    else:
+        print("  --> External feature allowlist: not used")
+
+    results_root = (PROJECT_ROOT / args.results_base / args.feature_strategy / mode).resolve()
+    output_parent_dir = os.path.join(results_root, "best_results", selected_model.lower())
     calibration_dir = os.path.join(output_parent_dir, "calibration")
     explicability_dir = os.path.join(output_parent_dir, "explicability")
 
@@ -678,186 +1042,224 @@ def main():
     os.makedirs(test_shap_dir, exist_ok=True)
     os.makedirs(test_lime_dir, exist_ok=True)
     
-    print(f"\nCarpeta de salida creada/ubicada en: {os.path.relpath(output_parent_dir)}")
-    
-    # ----------------------------------------------------------------------
-    # 1) CARGAR CSV E IDENTIFICAR X, y, groups
-    # ----------------------------------------------------------------------
-    pre_path = "../../../artifacts/radiomics"
-    data_filename = str(args.csv) if args.csv else "features_all_gland.csv"
-    data_path = os.path.join(pre_path, "concatenated_data", data_filename)
-    
-    print(f"\nCargando datos desde: {data_path}")
+    print(f"\nOutput directory: {os.path.relpath(output_parent_dir)}")
+
+    print(f"\nLoading data from: {data_path}")
     df = pd.read_csv(data_path)
-    df['patient_id_study_id'] = df['patient_id'].astype(str) + '_' + df['study_id'].astype(str)
-    df = df.set_index('patient_id_study_id')
-    print(f"Datos cargados. Dimensiones: {df.shape}")
-    
-    # Preparar variables para el modelado
+    if "sample_id" in df.columns:
+        df = df.set_index("sample_id")
+    else:
+        df['patient_id_study_id'] = df['patient_id'].astype(str) + '_' + df['study_id'].astype(str)
+        df = df.set_index('patient_id_study_id')
+    print(f"Loaded data shape: {df.shape}")
+
     y = df["label"].values
     groups = df["patient_id"].values
-    X = df.drop(columns=['patient_id', 'study_id', 'label'])
-    
-    # ----------------------------------------------------------------------
-    # 1.1) FILTRAR LAS VARIABLES USADAS (variables_usadas.txt)
-    # ----------------------------------------------------------------------
-    print(f"\nFiltrando variables usando el archivo: {args.variables}")
-    with open(args.variables, "r", encoding="utf-8") as f_vars:
-        used_vars = [line.strip() for line in f_vars if line.strip()]
-    X = X[used_vars]
-    
-    # ----------------------------------------------------------------------
-    # 2) SEPARAR HOLD-OUT TEST SET Y CONJUNTO DE ENTRENAMIENTO
-    # ----------------------------------------------------------------------
+    X = prepare_numeric_radiomics_matrix(df).replace([np.inf, -np.inf], np.nan)
+
     gss = GroupShuffleSplit(test_size=0.2, random_state=42)
     train_idx, test_idx = next(gss.split(X, y, groups=groups))
     X_train_full, X_test = X.iloc[train_idx], X.iloc[test_idx]
     y_train_full, y_test = y[train_idx], y[test_idx]
     groups_train_full = groups[train_idx]
-    
-    # ----------------------------------------------------------------------
-    # 3) DEFINIR PIPELINE Y ESPACIO DE BÚSQUEDA CON OPTIMIZACIÓN BAYESIANA
-    # ----------------------------------------------------------------------
+    patient_ids_test = groups[test_idx]
+
+    if args.variables:
+        variables_path = Path(args.variables)
+        if not variables_path.is_absolute():
+            variables_path = (PROJECT_ROOT / variables_path).resolve()
+        with open(variables_path, "r", encoding="utf-8") as f_vars:
+            allowlist = [line.strip() for line in f_vars if line.strip()]
+        allowlist = [feature_name for feature_name in allowlist if feature_name in X_train_full.columns]
+        if not allowlist:
+            raise ValueError(
+                "The provided external feature allowlist does not match any columns in the selected feature table."
+            )
+        X_train_full = X_train_full[allowlist]
+        X_test = X_test[allowlist]
+
+    selected_features, selection_df, selection_metadata = select_radiomics_features(
+        X_train=X_train_full,
+        y_train=y_train_full,
+        min_features=args.min_features,
+        max_features_cap=args.max_features_cap,
+        samples_per_feature=args.samples_per_feature,
+        minority_samples_per_feature=args.minority_samples_per_feature,
+        fdr_alpha=args.fdr_alpha,
+        correlation_threshold=args.correlation_threshold,
+    )
+    selection_dir = os.path.join(output_parent_dir, "feature_selection")
+    os.makedirs(selection_dir, exist_ok=True)
+    selection_csv_path = os.path.join(selection_dir, "training_only_feature_selection.csv")
+    selection_txt_path = os.path.join(selection_dir, "selected_features_training_only.txt")
+    selection_df.to_csv(selection_csv_path, index=False)
+    with open(selection_txt_path, "w", encoding="utf-8") as f_out:
+        for feature_name in selected_features:
+            f_out.write(f"{feature_name}\n")
+
+    X_train_full = X_train_full[selected_features].copy()
+    X_test = X_test[selected_features].copy()
+    print(
+        f"Selected {len(selected_features)} training-only features "
+        f"(FDR candidates: {selection_metadata['n_fdr_features']}, "
+        f"feature cap: {selection_metadata['feature_limit']})."
+    )
+
     number_folds = args.n_folds
     score_group = {
         'roc_auc': 'roc_auc',
         'f1': 'f1',
         'balanced_accuracy': 'balanced_accuracy'
     }
-    score_refit_str = 'roc_auc'  # Métrica para seleccionar el mejor modelo
-    random_state_value = 42      # Semilla para reproducibilidad
-    
-    # --- Configuración específica para cada tipo de modelo ---
+    score_refit_str = 'roc_auc'
+    random_state_value = 42
+
     if selected_model == 'SVM':
-        # Pipeline para SVM: Escalado → Filtro varianza → SVM
-        pipe = make_pipeline(StandardScaler(),
-                             VarianceThreshold(),
-                             SVC(random_state=random_state_value, probability=True))
-        # Espacio de búsqueda para hiperparámetros
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            SVC(random_state=random_state_value, class_weight="balanced", probability=True),
+        )
         param_grid = {
-            'svc__C': Real(1e-4, 1e3, prior='log-uniform'),            # Regularización
-            'svc__kernel': Categorical(['linear', 'rbf', 'poly']),     # Tipo de kernel
-            'svc__gamma': Real(1e-4, 1e3, prior='log-uniform'),        # Parámetro gamma
-            'svc__coef0': Real(0, 1)                                   # Término independiente (para poly)
+            'svc__C': Real(1e-4, 1e3, prior='log-uniform'),
+            'svc__kernel': Categorical(['linear', 'rbf', 'poly']),
+            'svc__gamma': Real(1e-4, 1e3, prior='log-uniform'),
+            'svc__coef0': Real(0, 1)
         }
         
     elif selected_model == 'LogisticRegression':
-        # Pipeline para Regresión Logística
-        pipe = make_pipeline(StandardScaler(),
-                             VarianceThreshold(),
-                             LogisticRegression(
-                                 class_weight='balanced', 
-                                 random_state=random_state_value,
-                                 solver='saga',  
-                                 max_iter=10000
-                             ))
-        # Espacio de búsqueda
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            LogisticRegression(
+                class_weight='balanced',
+                random_state=random_state_value,
+                solver='saga',
+                max_iter=10000
+            ),
+        )
         param_grid = {
-            'logisticregression__C': Real(1e-4, 1e3, prior='log-uniform'),  # Regularización
-            'logisticregression__penalty': Categorical(['l1', 'l2', 'elasticnet']),  # Tipo de regularización
-            'logisticregression__l1_ratio': Real(0.1, 0.9)                  # Ratio L1/L2 para elasticnet
+            'logisticregression__C': Real(1e-4, 1e3, prior='log-uniform'),
+            'logisticregression__penalty': Categorical(['l1', 'l2', 'elasticnet']),
+            'logisticregression__l1_ratio': Real(0.1, 0.9)
         }
         
     elif selected_model == 'RandomForest':
-        # Pipeline para Random Forest
-        pipe = make_pipeline(StandardScaler(),
-                             VarianceThreshold(),
-                             RandomForestClassifier(n_jobs=-1, 
-                                                    class_weight="balanced_subsample", 
-                                                    random_state=random_state_value))
-        # Espacio de búsqueda
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            RandomForestClassifier(
+                n_jobs=-1,
+                class_weight="balanced_subsample",
+                random_state=random_state_value,
+            ),
+        )
         param_grid = {
-            'randomforestclassifier__n_estimators': Integer(50, 1024),       # Número de árboles
-            'randomforestclassifier__max_depth': Integer(1, 10),             # Profundidad máxima
-            'randomforestclassifier__max_features': Categorical(['sqrt', 'log2', None]),  # Features por árbol
-            'randomforestclassifier__min_samples_split': Integer(2, 20)      # Min muestras para dividir nodo
+            'randomforestclassifier__n_estimators': Integer(50, 1024),
+            'randomforestclassifier__max_depth': Integer(1, 10),
+            'randomforestclassifier__max_features': Categorical(['sqrt', 'log2', None]),
+            'randomforestclassifier__min_samples_split': Integer(2, 20)
         }
         
     elif selected_model == 'NaiveBayes':
-        # Pipeline para Naive Bayes
-        pipe = make_pipeline(StandardScaler(),
-                             VarianceThreshold(),
-                             GaussianNB())
-        param_grid = {}  # Naive Bayes no tiene hiperparámetros a optimizar
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            GaussianNB(),
+        )
+        param_grid = {}
         
     elif selected_model == 'KNN':
-        # Pipeline para K-Nearest Neighbors
-        pipe = make_pipeline(StandardScaler(),
-                             VarianceThreshold(),
-                             KNeighborsClassifier(n_jobs=-1))
-        # Espacio de búsqueda
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            KNeighborsClassifier(n_jobs=-1),
+        )
         param_grid = {
-            'kneighborsclassifier__n_neighbors': Integer(2, 8),            # Número de vecinos
-            'kneighborsclassifier__weights': Categorical(['uniform', 'distance'])  # Ponderación
+            'kneighborsclassifier__n_neighbors': Integer(2, 8),
+            'kneighborsclassifier__weights': Categorical(['uniform', 'distance'])
         }
         
     elif selected_model == 'GradientBoosting':
-        # Pipeline para Gradient Boosting
-        pipe = make_pipeline(StandardScaler(),
-                             VarianceThreshold(),
-                             GradientBoostingClassifier(random_state=random_state_value))
-        # Espacio de búsqueda
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            GradientBoostingClassifier(random_state=random_state_value),
+        )
         param_grid = {
-            'gradientboostingclassifier__n_estimators': Integer(50, 1024),        # Número de árboles
-            'gradientboostingclassifier__learning_rate': Real(1e-4, 0.1, prior='log-uniform'),  # Tasa aprendizaje
-            'gradientboostingclassifier__max_depth': Integer(1, 10),              # Profundidad máxima
-            'gradientboostingclassifier__subsample': Real(0.5, 1.0),              # Fracción muestras por árbol
-            'gradientboostingclassifier__max_features': Categorical(['sqrt', 'log2', None])  # Features por árbol
+            'gradientboostingclassifier__n_estimators': Integer(50, 1024),
+            'gradientboostingclassifier__learning_rate': Real(1e-4, 0.1, prior='log-uniform'),
+            'gradientboostingclassifier__max_depth': Integer(1, 10),
+            'gradientboostingclassifier__subsample': Real(0.5, 1.0),
+            'gradientboostingclassifier__max_features': Categorical(['sqrt', 'log2', None])
         }
     else:
-        raise ValueError(f"Modelo '{selected_model}' no reconocido.")
+        raise ValueError(f"Unknown model '{selected_model}'.")
     
-    # ----------------------------------------------------------------------
-    # 4) AJUSTAR CON BayesSearchCV (OPTIMIZACIÓN BAYESIANA) SOBRE EL CONJUNTO DE ENTRENAMIENTO
-    # ----------------------------------------------------------------------
     cv = StratifiedGroupKFold(n_splits=number_folds, shuffle=True, random_state=random_state_value)
-    print("\nIniciando optimización bayesiana con BayesSearchCV...")
+    if param_grid:
+        print("\nRunning Bayesian hyperparameter optimization with BayesSearchCV...")
+        search = BayesSearchCV(
+            estimator=pipe,
+            search_spaces=param_grid,
+            scoring=score_group,
+            refit=score_refit_str,
+            cv=cv,
+            n_jobs=-1,
+            random_state=random_state_value,
+        )
+        search.fit(X_train_full, y_train_full, groups=groups_train_full)
+        best_estimator = search.best_estimator_
+        best_params = search.best_params_
+        cv_summary = {
+            key: (
+                search.cv_results_[f"mean_test_{key}"][search.best_index_],
+                search.cv_results_[f"std_test_{key}"][search.best_index_],
+            )
+            for key in score_group
+        }
+        print("\nOptimization completed.")
+        print(f"  --> Best parameters: {best_params}")
+    else:
+        print("\nNo hyperparameter search space defined for this model. Fitting the base pipeline directly...")
+        best_estimator = pipe.fit(X_train_full, y_train_full)
+        best_params = {}
+        cv_summary = {}
 
-    # Configurar búsqueda bayesiana
-    search = BayesSearchCV(
-        estimator=pipe,
-        search_spaces=param_grid,
-        scoring=score_group,       # Evaluación con múltiples métricas
-        refit=score_refit_str,     # Reentrenar con la mejor configuración según AUC
-        cv=cv,                     # Validación cruzada estratificada por grupo
-        n_jobs=-1,                 # Usar todos los núcleos disponibles
-        random_state=random_state_value
-    )
-
-    # Ejecutar búsqueda de hiperparámetros
-    search.fit(X_train_full, y_train_full, groups=groups_train_full)
-    best_estimator = search.best_estimator_
-    print("\nOptimización completada.")
-    print(f"  --> Mejores parámetros: {search.best_params_}")
-
-    # Guardar el mejor modelo
     estimator_path = os.path.join(output_parent_dir, "best_estimator.pkl")
     joblib.dump(best_estimator, estimator_path)
-    print(f"  --> Mejor estimador guardado en: {os.path.relpath(estimator_path)}")
+    print(f"  --> Best estimator saved to: {os.path.relpath(estimator_path)}")
 
-    # Alternativamente, cargar un modelo previamente guardado
-    # best_estimator = joblib.load(os.path.join(output_parent_dir, "best_estimator.pkl"))
-    
-    # ----------------------------------------------------------------------
-    # 5) GUARDAR REPORTE EN "report.txt"
-    # ----------------------------------------------------------------------
     report_path = os.path.join(output_parent_dir, "report.txt")
     with open(report_path, "w", encoding="utf-8") as f_out:
-        f_out.write(f"=== Fine-tuning del modelo {selected_model} ===\n\n")
-        f_out.write(f"Mejores parámetros (según {score_refit_str}): {search.best_params_}\n\n")
-        f_out.write("=== Resultados CV (BayesSearch) ===\n")
-        idx_best = search.best_index_
-        for key in score_group:
-            mean_test = search.cv_results_[f'mean_test_{key}'][idx_best]
-            std_test  = search.cv_results_[f'std_test_{key}'][idx_best]
-            f_out.write(f"  CV {key}: {mean_test:.3f} +/- {std_test:.3f}\n")
+        f_out.write(f"=== Final Hold-out Optimization: {selected_model} ===\n\n")
+        f_out.write(f"Feature table: {data_path}\n")
+        f_out.write(f"Training-only selection CSV: {selection_csv_path}\n")
+        f_out.write(f"Training-only selected features TXT: {selection_txt_path}\n")
+        f_out.write(f"Selected features: {len(selected_features)}\n")
+        f_out.write(f"FDR alpha: {args.fdr_alpha}\n")
+        f_out.write(f"Correlation threshold: {args.correlation_threshold}\n")
+        f_out.write(f"External allowlist used: {'yes' if args.variables else 'no'}\n")
+        f_out.write(f"Best parameters ({score_refit_str}): {best_params}\n\n")
+        if cv_summary:
+            f_out.write("=== Cross-validation Results (BayesSearchCV) ===\n")
+            for key in score_group:
+                mean_test, std_test = cv_summary[key]
+                f_out.write(f"  CV {key}: {mean_test:.3f} +/- {std_test:.3f}\n")
+        else:
+            f_out.write("=== Cross-validation Results ===\n")
+            f_out.write("  Hyperparameter search was skipped because this model has no search space.\n")
         f_out.write("\n")
-    
-    # ----------------------------------------------------------------------
-    # 6) EVALUAR EN TEST
-    # ----------------------------------------------------------------------
-    print("\nEvaluando modelo en el conjunto de test (sin calibrar)...")
+
+    print("\nEvaluating the uncalibrated model on the hold-out test set...")
     y_pred_test = best_estimator.predict(X_test)
+    p_pre = best_estimator.predict_proba(X_test)[:, 1]
     
     # Generar matriz de confusión sin calibrar
     confusion_fig = os.path.join(output_parent_dir, "confusion_matrix.png")
@@ -881,11 +1283,11 @@ def main():
     plt.tight_layout()
     plt.savefig(confusion_fig, dpi=dpi, bbox_inches='tight')
     plt.close()
-    print(f"Confusion matrix guardada en: {confusion_fig}")
+    print(f"Confusion matrix saved to: {confusion_fig}")
     
     # Calcular métricas de rendimiento en test
     if hasattr(best_estimator, "predict_proba"):
-        auc_ = roc_auc_score(y_test, best_estimator.predict_proba(X_test)[:, 1])
+        auc_ = roc_auc_score(y_test, p_pre)
     elif hasattr(best_estimator, "decision_function"):
         auc_ = roc_auc_score(y_test, best_estimator.decision_function(X_test))
     else:
@@ -904,11 +1306,39 @@ def main():
     
     # Reporte detallado de clasificación
     report_cr = classification_report(y_test, y_pred_test)
+    test_ci_uncalibrated = bootstrap_patient_level_confidence_intervals(
+        y_true=y_test,
+        y_prob=p_pre,
+        patient_ids=patient_ids_test,
+        threshold=0.5,
+        n_bootstrap=args.bootstrap_iterations,
+        ci_level=args.ci_level,
+        seed=42,
+    )
+    test_ci_uncalibrated_path = os.path.join(output_parent_dir, "test_confidence_intervals_uncalibrated.csv")
+    save_bootstrap_summary(
+        ci_result=test_ci_uncalibrated,
+        output_csv_path=test_ci_uncalibrated_path,
+        setting_name="uncalibrated_test",
+    )
+    roc_ci_uncalibrated_fig = os.path.join(output_parent_dir, "roc_test_uncalibrated_ci.png")
+    save_roc_with_confidence_band(
+        ci_result=test_ci_uncalibrated,
+        output_path=roc_ci_uncalibrated_fig,
+        line_color="black",
+    )
     
     with open(report_path, "a", encoding="utf-8") as f_out:
-        f_out.write("=== Evaluación en Test (NO calibrado) ===\n")
-        f_out.write(f"  Figura de Confusion Matrix: {confusion_fig}\n")
+        f_out.write("=== Hold-out Test Evaluation (Uncalibrated) ===\n")
+        f_out.write(f"  Confusion matrix figure: {confusion_fig}\n")
         f_out.write(f"  AUC: {auc_:.3f}\n")
+        f_out.write(
+            f"  AUC {ci_percent}% CI (bootstrap): "
+            f"[{test_ci_uncalibrated['metrics']['auc']['ci_low']:.3f}, "
+            f"{test_ci_uncalibrated['metrics']['auc']['ci_high']:.3f}]\n"
+        )
+        f_out.write(f"  Bootstrap summary CSV: {test_ci_uncalibrated_path}\n")
+        f_out.write(f"  ROC with CI figure: {roc_ci_uncalibrated_fig}\n")
         f_out.write(f"  MCC: {mcc_:.3f}\n")
         f_out.write(f"  Kappa: {kappa_:.3f}\n")
         f_out.write(f"  F1: {f1_:.3f}\n")
@@ -922,8 +1352,7 @@ def main():
         f_out.write(report_cr)
         f_out.write("\n\n")
     
-    # --- Calibrar con Platt scaling (sigmoid, cv=5) ---
-    print("\nCalibrando el modelo con Platt scaling (sigmoid, cv=5)...")
+    print("\nCalibrating the model with Platt scaling (sigmoid, cv=5)...")
     cal_clf = CalibratedClassifierCV(best_estimator, method="sigmoid", cv=5)
     cal_clf.fit(X_train_full, y_train_full)
     
@@ -955,7 +1384,7 @@ def main():
     # ax.set_title(f"Calibration Curve (pre), {selected_model}", fontsize=14)
     plt.savefig(calibration_fig_pre, dpi=dpi, bbox_inches='tight')
     plt.close()
-    print(f"  --> Calibration curve (pre) guardada en: {calibration_fig_pre}")
+    print(f"  --> Pre-calibration curve saved to: {calibration_fig_pre}")
     
     # --- Curva de calibración POST (después de calibrar) ---
     calibration_fig_post = os.path.join(calibration_dir, "calibration_post.png")
@@ -985,7 +1414,7 @@ def main():
             
     plt.savefig(calibration_fig_post, dpi=dpi, bbox_inches='tight')
     plt.close()
-    print(f"  --> Calibration curve (post) guardada en: {calibration_fig_post}")
+    print(f"  --> Post-calibration curve saved to: {calibration_fig_post}")
 
     # Métricas de calibración 
     def calibration_error(y_true, y_prob, n_bins=10, norm='l1'):
@@ -1014,8 +1443,28 @@ def main():
         return ece
 
     # 1) Probabilidades (sin / con Platt)
-    p_pre  = best_estimator.predict_proba(X_test)[:, 1]
     p_post = cal_clf.predict_proba(X_test)[:, 1]
+    test_ci_calibrated = bootstrap_patient_level_confidence_intervals(
+        y_true=y_test,
+        y_prob=p_post,
+        patient_ids=patient_ids_test,
+        threshold=0.5,
+        n_bootstrap=args.bootstrap_iterations,
+        ci_level=args.ci_level,
+        seed=42,
+    )
+    test_ci_calibrated_path = os.path.join(calibration_dir, "test_confidence_intervals_calibrated.csv")
+    save_bootstrap_summary(
+        ci_result=test_ci_calibrated,
+        output_csv_path=test_ci_calibrated_path,
+        setting_name="calibrated_test_threshold_0_5",
+    )
+    roc_ci_calibrated_fig = os.path.join(calibration_dir, "roc_test_calibrated_ci.png")
+    save_roc_with_confidence_band(
+        ci_result=test_ci_calibrated,
+        output_path=roc_ci_calibrated_fig,
+        line_color="black",
+    )
 
     # 2) Expected Calibration Error (ECE)
     ece_pre  = calibration_error(y_test, p_pre,  n_bins=10, norm='l1')
@@ -1027,19 +1476,25 @@ def main():
 
     # 4) Volcar resultados al informe
     with open(report_path, "a", encoding="utf-8") as f_out:
-        f_out.write("=== Métricas de calibración ===\n")
+        f_out.write("=== Calibration Metrics ===\n")
+        f_out.write(f"  AUC (post): {test_ci_calibrated['metrics']['auc']['point_estimate']:.3f}\n")
+        f_out.write(
+            f"  AUC {ci_percent}% CI (post, bootstrap): "
+            f"[{test_ci_calibrated['metrics']['auc']['ci_low']:.3f}, "
+            f"{test_ci_calibrated['metrics']['auc']['ci_high']:.3f}]\n"
+        )
+        f_out.write(f"  Bootstrap summary CSV (post): {test_ci_calibrated_path}\n")
+        f_out.write(f"  ROC with CI figure (post): {roc_ci_calibrated_fig}\n")
         f_out.write(f"  ECE  (pre):  {ece_pre:.3f}\n")
         f_out.write(f"  ECE  (post): {ece_post:.3f}\n")
         f_out.write(f"  Brier (pre): {brier_pre:.3f}\n")
         f_out.write(f"  Brier (post): {brier_post:.3f}\n\n")
 
-    # --- Ajuste de umbral para optimizar F1 ---
     thresholds = np.linspace(0.1, 0.9, 9)
     best_thresh = None
     best_f1 = -np.inf
     results = []
     
-    # Encontrar el umbral óptimo para F1
     for thresh in thresholds:
         y_pred_thresh = (cal_clf.predict_proba(X_test)[:, 1] >= thresh).astype(int)
         f1_val = f1_score(y_test, y_pred_thresh)
@@ -1048,10 +1503,8 @@ def main():
             best_f1 = f1_val
             best_thresh = thresh
     
-    # Generar predicciones con el umbral óptimo
     y_pred_best = (cal_clf.predict_proba(X_test)[:, 1] >= best_thresh).astype(int)
     
-    # Calcular métricas con el umbral optimizado
     auc_best    = roc_auc_score(y_test, cal_clf.predict_proba(X_test)[:, 1])
     mcc_best    = matthews_corrcoef(y_test, y_pred_best)
     kappa_best  = cohen_kappa_score(y_test, y_pred_best)
@@ -1064,18 +1517,42 @@ def main():
     balacc_best = balanced_accuracy_score(y_test, y_pred_best)
     
     report_cr_best = classification_report(y_test, y_pred_best)
+    test_ci_calibrated_best_threshold = bootstrap_patient_level_confidence_intervals(
+        y_true=y_test,
+        y_prob=p_post,
+        patient_ids=patient_ids_test,
+        threshold=best_thresh,
+        n_bootstrap=args.bootstrap_iterations,
+        ci_level=args.ci_level,
+        seed=42,
+    )
+    test_ci_calibrated_best_threshold_path = os.path.join(
+        calibration_dir, "test_confidence_intervals_calibrated_best_threshold.csv"
+    )
+    save_bootstrap_summary(
+        ci_result=test_ci_calibrated_best_threshold,
+        output_csv_path=test_ci_calibrated_best_threshold_path,
+        setting_name="calibrated_test_best_threshold",
+    )
 
-    # Guardar resultados de calibración y ajuste de umbral
     with open(report_path, "a", encoding="utf-8") as f_out:
-        f_out.write("=== Ajuste de Umbral (Resultados con el mejor threshold) ===\n")
-        f_out.write("Resultados para cada threshold:\n")
+        f_out.write("=== Threshold Tuning (Best F1 Threshold) ===\n")
+        f_out.write("Threshold sweep results:\n")
         for r in results:
             f_out.write("Threshold: {:.2f} - F1: {:.3f}\n".format(r['threshold'], r['f1']))
-        f_out.write(f"\nMejor threshold seleccionado (según F1): {best_thresh:.2f}\n")
-        f_out.write("\nClassification Report (con threshold {:.2f}):\n".format(best_thresh))
+        f_out.write(f"\nBest threshold selected by F1: {best_thresh:.2f}\n")
+        f_out.write("\nClassification report at threshold {:.2f}:\n".format(best_thresh))
         f_out.write(report_cr_best)
         f_out.write("\n")
         f_out.write(f"AUC: {auc_best:.3f}\n")
+        f_out.write(
+            f"AUC {ci_percent}% CI (bootstrap): "
+            f"[{test_ci_calibrated_best_threshold['metrics']['auc']['ci_low']:.3f}, "
+            f"{test_ci_calibrated_best_threshold['metrics']['auc']['ci_high']:.3f}]\n"
+        )
+        f_out.write(
+            f"Bootstrap summary CSV (best threshold): {test_ci_calibrated_best_threshold_path}\n"
+        )
         f_out.write(f"MCC: {mcc_best:.3f}\n")
         f_out.write(f"Kappa: {kappa_best:.3f}\n")
         f_out.write(f"F1: {f1_best:.3f}\n")
@@ -1086,7 +1563,6 @@ def main():
         f_out.write(f"NPV: {npv_best:.3f}\n")
         f_out.write(f"Balanced Accuracy: {balacc_best:.3f}\n\n")
     
-    # --- Matriz de confusión calibrada ---
     conf_matrix_best = confusion_matrix(y_test, y_pred_best)
     confusion_fig_best = os.path.join(calibration_dir, "confusion_matrix_best_threshold.png")
     fig, ax = plt.subplots(figsize=(6, 5))
@@ -1109,7 +1585,7 @@ def main():
     plt.close()
     
     with open(report_path, "a", encoding="utf-8") as f_out:
-        f_out.write(f"Confusion Matrix (Calibrado con threshold={best_thresh:.2f}) fig: {confusion_fig_best}\n\n")
+        f_out.write(f"Confusion matrix at calibrated threshold={best_thresh:.2f}: {confusion_fig_best}\n\n")
         
 
     # ----------------------------------------------------------------------
@@ -1131,7 +1607,7 @@ def main():
         preprocessor=preprocessor,
         shap_dir=train_shap_dir,
         report_path=report_path,
-        dataset_name="entrenamiento"
+        dataset_name="training"
     )
 
     # Realizar análisis SHAP para conjunto de test
@@ -1156,7 +1632,7 @@ def main():
             selected_features=selected_features,
             report_path=report_path,
             # shap_top_features=train_top_features,
-            dataset_name="entrenamiento"
+        dataset_name="training"
         )
 
     # Realizar análisis LIME para conjunto de test
@@ -1173,7 +1649,7 @@ def main():
             dataset_name="test"
         )
             
-    print(f"\nProceso finalizado. Report guardado en: {report_path}")
+    print(f"\nProcess completed. Report saved to: {report_path}")
 
 if __name__ == "__main__":
     main()

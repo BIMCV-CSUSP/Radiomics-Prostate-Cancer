@@ -1,4 +1,32 @@
-/notebooks/
-/artifacts/radiomics/concatenated_data/features_all_full.csv
-/artifacts/radiomics/concatenated_data/features_all_gland.csv
-/artifacts/deep_learning/gland/models/
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+
+# Generated experiment artefacts
+artifacts/deep_learning/**/models/
+artifacts/deep_learning/**/logs/
+artifacts/deep_learning/**/results/
+artifacts/deep_learning/**/metadata/
+artifacts/deep_learning/**/splits/
+artifacts/radiomics/concatenated_data/
+results/
+
+# Large model and report files
+*.pth
+*.pt
+*.pkl
+*.joblib

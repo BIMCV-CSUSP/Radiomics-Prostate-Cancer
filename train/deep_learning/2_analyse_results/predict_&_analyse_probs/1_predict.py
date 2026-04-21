@@ -1,285 +1,237 @@
 #!/usr/bin/env python
 """
-Script para generar predicciones usando modelos previamente entrenados.
+Generate validation predictions for previously trained deep learning models.
 
-Este script toma modelos entrenados para diferentes folds de validación cruzada,
-los carga, y genera predicciones sobre sus respectivos conjuntos de validación.
-Los resultados se guardan en archivos CSV para su posterior análisis estadístico.
-
-Flujo de funcionamiento:
-1. Busca carpetas que contengan modelos guardados (.pth)
-2. Carga la configuración correspondiente a cada modelo
-3. Para cada modelo encuentra los archivos para cada split de validación cruzada
-4. Carga los datos y realiza predicciones sobre el conjunto de validación
-5. Guarda las predicciones junto con las probabilidades por clase
+This script reuses the persisted grouped validation splits created during training,
+which guarantees that prediction and downstream analysis refer to the exact same
+fold assignment used to train each checkpoint.
 """
 
+from __future__ import annotations
+
 import argparse
-import json
 import importlib
-import logging
-import os
-import numpy as np
+import json
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+MODELING_DIR = PROJECT_ROOT / "train" / "deep_learning" / "1_modeling"
+if str(MODELING_DIR) not in sys.path:
+    sys.path.append(str(MODELING_DIR))
+COMMON_DIR = PROJECT_ROOT / "train" / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.append(str(COMMON_DIR))
+
 import pandas as pd
 import torch
-from sklearn.model_selection import StratifiedGroupKFold
-from monai.data import Dataset, DataLoader
 import torch.multiprocessing as mp
-mp.set_sharing_strategy('file_system')
-from z_data_loader_for_cv_for_predict import MyDataLoader
+from monai.data import DataLoader, Dataset
 
-def dynamic_import(class_path):
-    """
-    Importa dinámicamente una clase desde su ruta completa de módulo.
-    
-    Permite cargar clases (modelos) desde rutas especificadas en configuración
-    sin tener que importarlas explícitamente.
-    
-    Args:
-        class_path (str): Ruta completa de la clase en formato 'modulo.submodulo.Clase'
-        
-    Returns:
-        class: La clase importada (no una instancia)
-    """
-    module_name, class_name = class_path.rsplit('.', 1)
+from runtime_utils import load_or_create_splits, resolve_project_path, setup_logger
+
+mp.set_sharing_strategy("file_system")
+
+
+def dynamic_import(class_path: str):
+    """Import a class from a fully qualified module path."""
+
+    module_name, class_name = class_path.rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, class_name)
 
-def setup_logger(log_file):
-    """
-    Configura un sistema de registro que escribe tanto a archivo como a consola.
-    
-    Args:
-        log_file (str): Ruta donde guardar el archivo de log
-        
-    Returns:
-        logger: Objeto logger configurado
-    """ 
-    logger = logging.getLogger("predictions_logger")
-    logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
-    if logger.hasHandlers():
-        logger.handlers.clear()
+def get_loader_class(mode: str):
+    """Select the correct MONAI data loader for the requested input mode."""
 
-    fh = logging.FileHandler(log_file, mode='w')
-    fh.setLevel(logging.INFO)
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
+    if mode == "full":
+        loader_module = "data_loaders.data_loader_for_cv_org"
+    else:
+        loader_module = "data_loaders.data_loader_for_cv_roi"
+    return dynamic_import(f"{loader_module}.MyDataLoader")
 
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
-    return logger
 
 def main():
-    """
-    Función principal que coordina el proceso completo de generación de predicciones.
-    
-    Proceso:
-    1. Procesa argumentos de línea de comandos
-    2. Configura sistema de logging y directorios
-    3. Busca carpetas con modelos entrenados
-    4. Carga configuraciones de cada modelo
-    5. Para cada modelo y split de validación cruzada:
-       - Carga el modelo entrenado
-       - Prepara los datos de validación
-       - Genera predicciones
-       - Guarda resultados
-    """
+    """Generate validation predictions for every available trained checkpoint folder."""
 
-    # ============= Procesamiento de argumentos =============
-
-    parser = argparse.ArgumentParser(
-        description="Genera predicciones usando modelos entrenados."
+    parser = argparse.ArgumentParser(description="Generate validation predictions for trained MONAI models.")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["gland", "full"],
+        default="gland",
+        help="Input mode used during training.",
     )
     parser.add_argument(
-        "--mode", type=str, choices=["gland", "full"], default="gland",
-        help="Modo de predicción: 'gland' o 'full'."
+        "--data_root",
+        type=str,
+        default="artifacts/deep_learning",
+        help="Root directory that contains trained model folders.",
     )
     parser.add_argument(
-        "--data_root", type=str, default="../../../../artifacts/deep_learning",
-        help="Directorio raíz donde se ubican las carpetas de resultados y modelos."
+        "--config_file",
+        type=str,
+        default="train/deep_learning/1_modeling/config.json",
+        help="Path to the JSON configuration file.",
     )
     parser.add_argument(
-        "--config_file", type=str, default="../../1_modeling/config.json",
-        help="Ruta al fichero JSON de configuración."
+        "--csv_path",
+        type=str,
+        default="artifacts/data.csv",
+        help="Path to the dataset CSV file.",
     )
     parser.add_argument(
-        "--csv_path", type=str, default="../../../../artifacts/data.csv",
-        help="Ruta al CSV de datos."
+        "--input_shape",
+        type=int,
+        nargs=3,
+        default=[128, 128, 32],
+        help="Input tensor shape as three integers.",
     )
+    parser.add_argument("--n_splits", type=int, default=5, help="Number of grouped validation folds.")
+    parser.add_argument("--seed", type=int, default=42, help="Seed used to build persisted validation folds.")
     parser.add_argument(
-        "--input_shape", type=int, nargs=3, default=[128, 128, 32],
-        help="Dimensiones de la imagen de entrada."
+        "--output_base",
+        type=str,
+        default="results/deep_learning/model_comparison/predict_and_analyse_probs",
+        help="Base directory for the exported prediction CSV files.",
     )
-    parser.add_argument(
-        "--n_splits", type=int, default=5,
-        help="Número de splits para validación cruzada."
-    )
-    parser.add_argument(
-        "--output_base", type=str, default="../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/",
-        help="Directorio base para guardar las predicciones."
-    )
-
     args = parser.parse_args()
 
-    # ============= Configuración de directorios y logging =============
+    models_root = resolve_project_path(PROJECT_ROOT, Path(args.data_root) / args.mode / "models")
+    output_dir = resolve_project_path(
+        PROJECT_ROOT, Path(args.output_base) / f"{args.mode}_analysis" / "predictions"
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Construcción dinámica de rutas según el modo
-    models_root = os.path.join(args.data_root, args.mode, "models")
-    output_dir = os.path.join(args.output_base, f"{args.mode}_analysis", "predictions")
+    logger = setup_logger("deep_learning_predictions", output_dir / "generate_predictions.log")
+    logger.info("Scanning model checkpoints in %s", models_root)
 
-    # Crear directorio de salida si no existe
-    os.makedirs(output_dir, exist_ok=True)
+    config_path = resolve_project_path(PROJECT_ROOT, args.config_file)
+    csv_path = resolve_project_path(PROJECT_ROOT, args.csv_path)
+    with config_path.open("r", encoding="utf-8") as file_handle:
+        configs = json.load(file_handle)
 
-    # Configurar sistema de logging
-    log_file = os.path.join(output_dir, "generate_predictions.log")
-    logger = setup_logger(log_file)
+    LoaderClass = get_loader_class(args.mode)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ============= Búsqueda de carpetas con modelos =============
-    # Reunir carpetas que contengan archivos de modelo (.pth)
-    model_folders = []
-    for root, dirs, files in os.walk(models_root):
-        if any(f.endswith(".pth") for f in files):
-            model_folders.append(root)
-    
-    logger.info(f"Se encontraron {len(model_folders)} carpetas con modelos")
-    
-    # ============= Cargar configuraciones =============
-    with open(args.config_file, "r") as f:
-        configs = json.load(f)
-    
-    # ============= Procesamiento de cada modelo =============
-    # Para cada carpeta de modelos
+    data_loader = LoaderClass(
+        csv_path=str(csv_path),
+        input_shape=tuple(args.input_shape),
+        config={},
+        transformations=[],
+        num_classes=2,
+    )
+    all_data = data_loader.get_all_data()
+    all_labels = [int(torch.argmax(item["label"]).item()) for item in all_data]
+    patient_ids = [item["patient_id"] for item in all_data]
+
+    split_file = resolve_project_path(
+        PROJECT_ROOT,
+        Path("artifacts") / "deep_learning" / args.mode / "splits" / f"{csv_path.stem}_{args.mode}_{args.n_splits}fold_seed{args.seed}.json",
+    )
+    split_bundle = load_or_create_splits(
+        split_file=split_file,
+        labels=all_labels,
+        groups=patient_ids,
+        n_splits=args.n_splits,
+        seed=args.seed,
+        metadata={
+            "csv_path": str(csv_path),
+            "mode": args.mode,
+            "n_splits": args.n_splits,
+            "seed": args.seed,
+        },
+    )
+    logger.info("Using validation split definition from %s", split_file)
+
+    model_folders = [folder for folder in models_root.iterdir() if folder.is_dir()]
+    logger.info("Found %s model directories.", len(model_folders))
+
     for model_folder in model_folders:
-        model_name = os.path.basename(model_folder)
-        logger.info(f"Procesando modelos en: {model_folder}")
-        
-        # Comprobar si el modelo tiene configuración
+        model_name = model_folder.name
+        logger.info("Processing model directory %s", model_folder)
+
         if model_name not in configs:
-            logger.warning(f"No se encontró configuración para el modelo {model_name}. Usando configuración por defecto.")
-            config = {"model": "models.densenet.DenseNet", "model_args": {"num_classes": 2}}
-        else:
-            config = configs[model_name]
-        
-        # ============= Cargar datos =============
-        data_loader = MyDataLoader(
-            csv_path=args.csv_path,
-            input_shape=tuple(args.input_shape),
-            config={"batch_size": 2, "num_workers": 4},
-            transformations=[], # Sin transformaciones adicionales para predicción
-            num_classes=config.get("model_args", {}).get("num_classes", 2)
-        )
+            logger.warning("Skipping %s because it is missing from %s", model_name, config_path)
+            continue
 
-        # Obtener todos los datos
-        all_data = data_loader.get_all_data()
+        config = configs[model_name]
+        ModelClass = dynamic_import(config["model"])
+        model_files = sorted(model_folder.glob("*.pth"))
+        if not model_files:
+            logger.warning("Skipping %s because no checkpoint files were found.", model_name)
+            continue
 
-        # Extraer etiquetas y IDs para validación cruzada
-        all_labels = [int(torch.argmax(item["label"]).item()) for item in all_data]
-        patient_ids = [item["patient_id"] for item in all_data]
-        
-        # Encontrar todos los archivos de modelo en esta carpeta
-        model_files = [f for f in os.listdir(model_folder) if f.endswith(".pth")]
-        
-        # ============= Configurar validación cruzada =============
-        # Dividir los datos usando la misma estrategia que en entrenamiento
-        splitter = StratifiedGroupKFold(n_splits=args.n_splits, shuffle=True, random_state=42)
-        
-        # Lista para almacenar todas las predicciones
         all_predictions = []
-        
-        # ============= Procesar cada split =============
-        # Para cada split de validación cruza
-        for split_index, (train_idx, val_idx) in enumerate(splitter.split(all_data, all_labels, groups=patient_ids), start=1):
-            logger.info(f"Procesando split {split_index}/{args.n_splits}")
-            
-            # Buscar el modelo correspondiente a este split
-            split_model_file = None
-            for model_file in model_files:
-                if f"split_{split_index}" in model_file:
-                    split_model_file = model_file
-                    break
-            
-            # Si no encontramos modelo para este split, pasar al siguiente
-            if split_model_file is None:
-                logger.warning(f"No se encontró modelo para el split {split_index} en {model_folder}")
+        for split_info in split_bundle["splits"]:
+            split_index = split_info["split_index"]
+            split_model_path = model_folder / f"best_model_split_{split_index}.pth"
+            if not split_model_path.exists():
+                logger.warning(
+                    "Checkpoint for split %s was not found in %s. Skipping this split.",
+                    split_index,
+                    model_folder,
+                )
                 continue
 
-            # ============= Cargar modelo =============
-            try:
-                # Importar dinámicamente la clase del modelo
-                ModelClass = dynamic_import(config["model"])
-
-                # Instanciar el modelo con los argumentos de configuración
-                model = ModelClass(**config.get("model_args", {}))
-                model_path = os.path.join(model_folder, split_model_file)
-
-                # Cargar los pesos del modelo entrenado
-                model.load_state_dict(torch.load(model_path))
-                logger.info(f"Modelo cargado: {model_path}")
-            except Exception as e:
-                logger.error(f"Error al cargar el modelo {split_model_file}: {e}")
-                continue
-            
-            # ============= Preparar datos de validación =============
-            # Tomamos el conjunto de validación como "test" para este split            
-            test_subset = [all_data[i] for i in val_idx]
-            test_dataset = Dataset(data=test_subset, transform=data_loader.get_transforms(augment=False))
-            test_loader = DataLoader(test_dataset, batch_size=2, num_workers=4, shuffle=False)
-            
-            # ============= Configurar dispositivo (CPU/GPU) =============
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = ModelClass(**config.get("model_args", {}))
+            model.load_state_dict(torch.load(split_model_path, map_location=device))
             model = model.to(device)
             model.eval()
-            
-            # ============= Generar predicciones =============
-            predictions = []
+
+            validation_subset = [all_data[index] for index in split_info["validation_indices"]]
+            validation_dataset = Dataset(
+                data=validation_subset,
+                transform=data_loader.get_transforms(augment=False),
+            )
+            validation_loader = DataLoader(validation_dataset, batch_size=2, num_workers=4, shuffle=False)
+
+            split_predictions = []
             with torch.no_grad():
-                for batch in test_loader:
+                for batch in validation_loader:
                     inputs = batch["image"].to(device)
-                    label_hot = batch["label"].to(device)
-                    label_cls = torch.argmax(label_hot, dim=1)
-                    patient_ids_batch = batch["patient_id"]
-                    
+                    labels = torch.argmax(batch["label"].to(device), dim=1)
                     outputs = model(inputs)
                     if isinstance(outputs, (tuple, list)):
                         outputs = outputs[0]
-                    
-                    # Calcular probabilidades y predicciones
-                    probs = torch.softmax(outputs, dim=1)
-                    preds = torch.argmax(outputs, dim=1)
-                    
-                    # Guardar resultados para cada muestra en el batch
-                    for i in range(inputs.size(0)):
+
+                    probabilities = torch.softmax(outputs, dim=1)
+                    predictions = torch.argmax(outputs, dim=1)
+
+                    patient_batch = batch["patient_id"]
+                    study_batch = batch["study_id"]
+                    for sample_index in range(inputs.size(0)):
                         prediction_entry = {
                             "split": split_index,
                             "model": model_name,
-                            "patient_id": patient_ids_batch[i],
-                            "true_label": label_cls[i].item(),
-                            "prediction": preds[i].item(),
+                            "patient_id": patient_batch[sample_index],
+                            "study_id": study_batch[sample_index],
+                            "true_label": labels[sample_index].item(),
+                            "prediction": predictions[sample_index].item(),
                         }
-                        
-                        # Guardar probabilidades para cada clase
-                        for class_idx in range(probs.size(1)):
-                            prediction_entry[f"prob_class_{class_idx}"] = probs[i, class_idx].item()
-                        
-                        predictions.append(prediction_entry)
-            
-            # Añadir predicciones de este split a la lista global
-            all_predictions.extend(predictions)
-            logger.info(f"Realizadas {len(predictions)} predicciones para el split {split_index}")
-        
-        # ============= Guardar predicciones =============
-        # Guardar todas las predicciones para este modelo
+                        for class_index in range(probabilities.size(1)):
+                            prediction_entry[f"prob_class_{class_index}"] = probabilities[
+                                sample_index, class_index
+                            ].item()
+                        split_predictions.append(prediction_entry)
+
+            all_predictions.extend(split_predictions)
+            logger.info(
+                "Generated %s validation predictions for model %s on split %s.",
+                len(split_predictions),
+                model_name,
+                split_index,
+            )
+
         if all_predictions:
-            predictions_df = pd.DataFrame(all_predictions)
-            output_file = os.path.join(output_dir, f"{model_name}_predictions.csv")
-            predictions_df.to_csv(output_file, index=False)
-            logger.info(f"Predicciones guardadas en: {output_file}")
-    
-    logger.info("Proceso de generación de predicciones completado")
+            output_file = output_dir / f"{model_name}_predictions.csv"
+            pd.DataFrame(all_predictions).to_csv(output_file, index=False)
+            logger.info("Saved prediction CSV to %s", output_file)
+
+    logger.info("Prediction generation finished successfully.")
+
 
 if __name__ == "__main__":
     main()

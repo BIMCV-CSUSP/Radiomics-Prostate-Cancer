@@ -1,252 +1,192 @@
 #!/usr/bin/env python
-"""
-Script para análisis estadístico de predicciones de múltiples modelos.
+"""Run patient-level statistical comparisons across deep learning prediction files."""
 
-Este script implementa un análisis estadístico para comparar diferentes 
-modelos de deep learning a nivel de paciente, siguiendo un enfoque 
-de tests no paramétricos adecuado para comparaciones múltiples:
+from __future__ import annotations
 
-Proceso estadístico:
-1. Test de Friedman para detectar diferencias globales entre modelos
-2. Si hay diferencias globales, comparaciones post-hoc con Wilcoxon + corrección Holm
-3. Generación de visualizaciones y reportes detallados
-"""
-
-import os
-import glob
 import argparse
+import glob
+import os
+
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import friedmanchisquare, wilcoxon
 from statsmodels.stats.multitest import multipletests
 
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
-import scienceplots
+matplotlib.use("Agg")
+try:
+    import scienceplots  # noqa: F401
 
-plt.style.use(['science', 'grid'])
-dpi = 300
+    plt.style.use(["science", "grid"])
+except ModuleNotFoundError:
+    plt.style.use("default")
+DPI = 300
 
-def perform_p_value_analysis(
-    df: pd.DataFrame,
-    metric_col: str,
-    alpha: float,
-    output_dir: str
-):
-    """
-    Realiza análisis estadístico completo para comparar modelos usando métrica especificada.
-    
-    Proceso:
-    1) Test de Friedman para diferencias globales en `metric_col`
-    2) Comparaciones pareadas con Wilcoxon (dos colas) + corrección Holm
-    3) Boxplot de `metric_col` por modelo
-    4) Heatmap de p-values corregidos (si el test global es significativo)
-    5) Informe de texto con resultados detallados
-    
-    Args:
-        df (pd.DataFrame): DataFrame con predicciones
-        metric_col (str): Nombre de la columna con la métrica a analizar
-        alpha (float): Nivel de significancia para los tests
-        output_dir (str): Directorio para guardar resultados
-        
-    Returns:
-        list: Líneas de texto con el resumen del análisis
-    """
 
-    # Crear directorio de salida si no existe
+def perform_p_value_analysis(df: pd.DataFrame, metric_col: str, alpha: float, output_dir: str):
+    """Compare models at patient level for the requested prediction metric."""
+
     os.makedirs(output_dir, exist_ok=True)
+    pivot = (
+        df.pivot_table(index="patient_id", columns="model", values=metric_col, aggfunc="mean")
+        .dropna(axis=0)
+    )
+    order = (
+        df.groupby("model")[metric_col].median().sort_values(ascending=False).index.tolist()
+    )
+    pivot = pivot[order]
 
-    # ===== 1. Preparación de matriz paciente × modelo =====
-    # Pivotamos para tener una matriz donde:
-    # - Cada fila es un paciente
-    # - Cada columna es un modelo
-    # - Los valores son la media de la métrica por paciente y modelo
-    pivot = (df.pivot_table(index='patient_id',      
-                            columns='model',
-                            values=metric_col, 
-                            aggfunc='mean')          
-              .dropna(axis=0)) 
-                         
-    # Ordenamos los modelos por mediana de la métrica (descendente)
-    orden = (df.groupby('model')[metric_col]
-               .median()
-               .sort_values(ascending=False)
-               .index.tolist())
-    pivot = pivot[orden] # Reorganizamos columnas según este orden
+    friedman_inputs = [pivot[column].values for column in pivot.columns]
+    friedman_statistic, p_global = friedmanchisquare(*friedman_inputs)
 
-    # ===== 2. Test de Friedman =====
-    datos = [pivot[col].values for col in pivot.columns]
-    stat, p_global = friedmanchisquare(*datos)
-
-    # ===== 3. Preparamos informe de texto =====
-    lines = []
-    lines.append("=================================")
-    lines.append(f"TEST DE FRIEDMAN por paciente | métrica: {metric_col}")
-    lines.append(f"Estadístico: {stat:.4f}, p-value: {p_global:.4e}")
-    lines.append(f"alpha = {alpha}")
-
-    # Interpretación del resultado global
+    summary_lines = [
+        "=================================",
+        f"Patient-level FRIEDMAN TEST | metric: {metric_col}",
+        f"Statistic: {friedman_statistic:.4f}, p-value: {p_global:.4e}",
+        f"alpha = {alpha}",
+    ]
     if p_global < alpha:
-        lines.append("=> HAY diferencias estadísticamente significativas entre los modelos (rechazamos H0).")
+        summary_lines.append("=> Statistically significant differences were detected across the models.")
     else:
-        lines.append("=> NO se evidencian diferencias estadísticamente significativas entre los modelos (no se rechaza H0).")
-    lines.append("=================================\n")
+        summary_lines.append("=> No statistically significant differences were detected across the models.")
+    summary_lines.append("=================================\n")
 
-    # ===== 4. Comparaciones post-hoc si el test global es significativo =====
+    pairwise_matrix = None
     if p_global < alpha:
-        modelos = pivot.columns.tolist()
-        n = len(modelos)
-        pvals, pares = [], []
-
-        # Realizamos todas las comparaciones pareadas posibles
-        for i in range(n):
-            for j in range(i+1, n):
-                xi, xj = pivot.iloc[:, i].values, pivot.iloc[:, j].values
+        model_names = pivot.columns.tolist()
+        raw_p_values = []
+        model_pairs = []
+        for i in range(len(model_names)):
+            for j in range(i + 1, len(model_names)):
                 try:
-                    # Test de Wilcoxon para muestras pareadas
-                    _, p = wilcoxon(xi, xj, alternative='two-sided')
-                except:
-                    p = np.nan
-                pvals.append(p)
-                pares.append((i, j))
+                    _, p_value = wilcoxon(
+                        pivot.iloc[:, i].values,
+                        pivot.iloc[:, j].values,
+                        alternative="two-sided",
+                    )
+                except ValueError:
+                    p_value = np.nan
+                raw_p_values.append(p_value)
+                model_pairs.append((i, j))
 
-        # Corrección de Holm-Bonferroni para comparaciones múltiples
-        _, p_corr, _, _ = multipletests(pvals, alpha=alpha, method='holm')
+        _, corrected_p_values, _, _ = multipletests(raw_p_values, alpha=alpha, method="holm")
+        pairwise_matrix = np.ones((len(model_names), len(model_names)))
+        summary_lines.append("Pairwise comparisons (Wilcoxon + Holm correction):")
 
-        # Creamos matriz simétrica de p-values corregidos
-        matriz_p = np.ones((n, n))
-        for k, (i, j) in enumerate(pares):
-            matriz_p[i, j] = matriz_p[j, i] = p_corr[k] # Asignar p-value corregido
+        significant_lines = []
+        for index, (i, j) in enumerate(model_pairs):
+            corrected_p = corrected_p_values[index]
+            pairwise_matrix[i, j] = corrected_p
+            pairwise_matrix[j, i] = corrected_p
+            line = f"    {model_names[i]} vs {model_names[j]}: corrected p-value = {corrected_p:.4e}"
+            if corrected_p < alpha:
+                line += " => SIGNIFICANT DIFFERENCE"
+                significant_lines.append(line)
+            summary_lines.append(line)
 
-        # Añadimos resultados al informe
-        lines.append("Resultados comparaciones 2 a 2 (Wilcoxon + Holm):")
-        for k, (i, j) in enumerate(pares):
-            lines.append(f"    {modelos[i]} vs {modelos[j]}: p‑valor corregido = {p_corr[k]:.4e}")
-
-        # Destacamos solo los pares con diferencias significativas
-        sig = [f"    {modelos[i]} vs {modelos[j]}: p‑valor corregido = {p_corr[k]:.4e}"
-               for k, (i, j) in enumerate(pares) if p_corr[k] < alpha]
-        lines.append("\nComparaciones con diferencia significativa:")
-        lines.extend(sig or ["    Ninguna encontrada."])
+        summary_lines.append("\nSignificant pairwise comparisons:")
+        summary_lines.extend(significant_lines or ["    None."])
     else:
-        # Si no hay diferencias globales, no hacemos comparaciones pareadas
-        matriz_p = None
-        lines.append("No se realizan comparaciones 2 a 2 porque el test global no es significativo.")
+        summary_lines.append("Pairwise comparisons were skipped because the global test was not significant.")
 
-    # ===== 5. Guardamos informe de texto =====
-    ruta_txt = os.path.join(output_dir, f"p_value_analysis_{metric_col}.txt")
-    with open(ruta_txt, 'w', encoding='utf-8') as f:
-        f.write("\n".join(lines))
-    print(f"  → Informe guardado en: {ruta_txt}")
+    report_path = os.path.join(output_dir, f"p_value_analysis_{metric_col}.txt")
+    with open(report_path, "w", encoding="utf-8") as file_handle:
+        file_handle.write("\n".join(summary_lines))
+    print(f"Saved statistical report to: {report_path}")
 
-    # ===== 6. Boxplot =====
     plt.figure(figsize=(10, 6))
-    pivot.boxplot(color='black',
-                  boxprops=dict(color='black'),
-                  medianprops=dict(color='black'),
-                  whiskerprops=dict(color='black'),
-                  capprops=dict(color='black'),
-                  flierprops=dict(color='black'))
-    
-    # plt.title(f"Distribución de {metric_col} por modelo")
-    ylabel_dict = {
-        'prob_class_1': 'Probabilidad de la clase positiva',
-        'prob_class_0': 'Probabilidad de la clase negativa'
+    pivot.boxplot(
+        color="black",
+        boxprops=dict(color="black"),
+        medianprops=dict(color="black"),
+        whiskerprops=dict(color="black"),
+        capprops=dict(color="black"),
+        flierprops=dict(color="black"),
+    )
+    ylabel_map = {
+        "prob_class_1": "Probability of the positive class",
+        "prob_class_0": "Probability of the negative class",
     }
-    plt.ylabel(ylabel_dict.get(metric_col, metric_col))
-    plt.xticks(rotation=45, ha='right')
-
-    # Guardar boxplot 
+    plt.ylabel(ylabel_map.get(metric_col, metric_col))
+    plt.xticks(rotation=45, ha="right")
     boxplot_path = os.path.join(output_dir, f"boxplot_{metric_col}.png")
-    plt.savefig(boxplot_path, dpi=dpi, bbox_inches='tight')
+    plt.savefig(boxplot_path, dpi=DPI, bbox_inches="tight")
     plt.close()
-    print(f"  → Boxplot guardado en: {boxplot_path}")
+    print(f"Saved boxplot to: {boxplot_path}")
 
-    # ===== 7. Heatmap de p-values (solo si hay diferencias globales) =====
-    if matriz_p is not None:
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.grid(False)
+    if pairwise_matrix is not None:
+        figure, axis = plt.subplots(figsize=(8, 6))
+        axis.grid(False)
+        heatmap = axis.imshow(pairwise_matrix, interpolation="nearest", aspect="auto", cmap="cividis")
+        axis.set_xticks(np.arange(len(model_names)))
+        axis.set_yticks(np.arange(len(model_names)))
+        axis.set_xticklabels(model_names, rotation=45, ha="right")
+        axis.set_yticklabels(model_names)
+        axis.set_xticks(np.arange(-0.5, len(model_names), 1), minor=True)
+        axis.set_yticks(np.arange(-0.5, len(model_names), 1), minor=True)
+        axis.grid(which="minor", color="black", linestyle="--", linewidth=1)
+        axis.tick_params(which="minor", bottom=False, left=False)
 
-        cax = ax.imshow(matriz_p, interpolation='nearest', aspect='auto', cmap='cividis')
+        for i in range(len(model_names)):
+            for j in range(len(model_names)):
+                color = "white" if pairwise_matrix[i, j] < alpha else "black"
+                axis.text(j, i, f"{pairwise_matrix[i, j]:.3f}", ha="center", va="center", color=color, fontsize=8)
 
-        ax.set_xticks(np.arange(len(modelos)))
-        ax.set_yticks(np.arange(len(modelos)))
-        ax.set_xticklabels(modelos, rotation=45, ha='right')
-        ax.set_yticklabels(modelos)
-
-        ax.set_xticks(np.arange(-0.5, len(modelos), 1), minor=True)
-        ax.set_yticks(np.arange(-0.5, len(modelos), 1), minor=True)
-        ax.grid(which='minor', color='black', linestyle='--', linewidth=1)
-        ax.tick_params(which='minor', bottom=False, left=False)
-        
-        for i in range(len(modelos)):
-            for j in range(len(modelos)):
-                color = 'white' if matriz_p[i, j] < alpha else 'black'
-                ax.text(j, i, f"{matriz_p[i, j]:.3f}", ha='center', va='center', color=color, fontsize=8)
-        
-        fig.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
-        plt.tight_layout()
-
-        # Guardar heatmap
+        figure.colorbar(heatmap, ax=axis, fraction=0.046, pad=0.04)
         heatmap_path = os.path.join(output_dir, f"heatmap_pvalues_{metric_col}.png")
-        plt.savefig(heatmap_path, dpi=dpi)
+        plt.tight_layout()
+        plt.savefig(heatmap_path, dpi=DPI)
         plt.close()
-        print(f"  → Heatmap p‑values guardado en: {heatmap_path}")
+        print(f"Saved p-value heatmap to: {heatmap_path}")
 
-    return lines
 
 def main():
-    """
-    Función principal que coordina el análisis estadístico.
-    
-    1. Procesa argumentos de línea de comandos
-    2. Lee y combina archivos CSV de predicciones
-    3. Ejecuta análisis estadístico para cada métrica especificada
-    """
-    
-    # ===== Procesamiento de argumentos =====
+    """CLI entrypoint."""
+
     parser = argparse.ArgumentParser(
-        description="Analiza diferencias estadísticas entre modelos usando patient_id como unidad."
+        description="Analyse statistical differences across deep learning prediction files."
     )
     parser.add_argument(
-        "-i", "--predictions_dir", type=str, default="../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/predictions",
-        help="Carpeta con los CSV de predicciones"
+        "-i",
+        "--predictions_dir",
+        type=str,
+        default="results/deep_learning/model_comparison/predict_and_analyse_probs/gland_analysis/predictions",
+        help="Directory containing prediction CSV files.",
     )
     parser.add_argument(
-        "-m", "--metric_col", nargs='+', default=["prob_class_1", "prob_class_0"],
-        help="Una o más columnas de la métrica a analizar (separadas por espacio)"
+        "-m",
+        "--metric_col",
+        nargs="+",
+        default=["prob_class_1", "prob_class_0"],
+        help="Prediction columns to compare.",
     )
+    parser.add_argument("-a", "--alpha", type=float, default=0.05, help="Significance level.")
     parser.add_argument(
-        "-a", "--alpha", type=float, default=0.05,
-        help="Nivel de significación"
-    )
-    parser.add_argument(
-        "-o", "--output_dir", type=str, default="../../../../results/deep_learning/model_comparison/predict_&_analyse_probs/gland_analysis/statistical_analysis",
-        help="Directorio de salida"
+        "-o",
+        "--output_dir",
+        type=str,
+        default="results/deep_learning/model_comparison/predict_and_analyse_probs/gland_analysis/statistical_analysis",
+        help="Directory where the statistical outputs will be saved.",
     )
     args = parser.parse_args()
 
-    # ===== Carga de datos =====
-    # Buscar todos los archivos CSV en el directorio de predicciones
     csv_files = sorted(glob.glob(os.path.join(args.predictions_dir, "*.csv")))
     if not csv_files:
-        raise FileNotFoundError(f"No se encontraron CSV en {args.predictions_dir}")
+        raise FileNotFoundError(f"No prediction CSV files were found in {args.predictions_dir}")
 
-    # Combinar todos los CSVs en un único DataFrame
-    df_all = pd.concat((pd.read_csv(f) for f in csv_files), ignore_index=True)
-    print(f"Leídos {len(csv_files)} archivos, total de filas: {len(df_all)}")
+    df_all = pd.concat((pd.read_csv(csv_path) for csv_path in csv_files), ignore_index=True)
+    print(f"Loaded {len(csv_files)} prediction files with {len(df_all)} total rows.")
 
-    # ===== Análisis por métrica =====
-    # Analizar cada métrica especificada
-    for metric in args.metric_col:
-        print(f"\n=== Analizando métrica: {metric} ===")
+    for metric_name in args.metric_col:
+        print(f"\n=== Analysing metric: {metric_name} ===")
         perform_p_value_analysis(
             df=df_all,
-            metric_col=metric,
+            metric_col=metric_name,
             alpha=args.alpha,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
         )
+
 
 if __name__ == "__main__":
     main()

@@ -1,115 +1,132 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Compare gland-only versus full-volume radiomics results classifier by classifier."""
+
+from __future__ import annotations
 
 import argparse
-import os
+from pathlib import Path
+
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
-import matplotlib
-matplotlib.use('Agg')  # backend no interactivo
-import matplotlib.pyplot as plt
-import scienceplots
-plt.style.use(['science', 'grid'])
+
+matplotlib.use("Agg")
+try:
+    import scienceplots  # noqa: F401
+
+    plt.style.use(["science", "grid"])
+except ModuleNotFoundError:
+    plt.style.use("default")
 
 
-def one_sided_from_two_sided(stat, p_two, direction=+1):
-    """Convierte un p‑valor bicaudal en unilateral."""
-    return p_two / 2 if stat * direction > 0 else 1 - p_two / 2
+def one_sided_from_two_sided(statistic, p_two_sided, direction=+1):
+    """Convert a two-sided Wilcoxon p-value into a one-sided p-value."""
 
-def iqr(arr):
-    """Rango intercuartílico de un array NumPy."""
-    q75, q25 = np.percentile(arr, [75, 25])
+    return p_two_sided / 2 if statistic * direction > 0 else 1 - p_two_sided / 2
+
+
+def interquartile_range(values):
+    """Compute the interquartile range of a NumPy array."""
+
+    q75, q25 = np.percentile(values, [75, 25])
     return q75 - q25
 
+
 def compare_models(gland_csv: str, full_csv: str, outdir: str, alpha: float = 0.05):
-    """Compara glándula vs. imagen completa para cada clasificador."""
+    """Compare gland and full-volume validation AUC distributions for each classifier."""
+
     df_gland = pd.read_csv(gland_csv)
     df_full = pd.read_csv(full_csv)
+    shared_models = sorted(set(df_gland["Classifier"]).intersection(df_full["Classifier"]))
+    if not shared_models:
+        raise ValueError("No shared classifiers were found between the gland and full-volume result files.")
 
-    modelos = sorted(set(df_gland['Classifier']).intersection(df_full['Classifier']))
-    if not modelos:
-        raise ValueError("No hay modelos en común entre ambos ficheros.")
+    output_dir = Path(outdir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    os.makedirs(outdir, exist_ok=True)
+    for model_name in shared_models:
+        gland_auc = df_gland.loc[df_gland["Classifier"] == model_name, "val_auc"].values
+        full_auc = df_full.loc[df_full["Classifier"] == model_name, "val_auc"].values
 
-    for model in modelos:
-        auc_g = df_gland.loc[df_gland['Classifier'] == model, 'val_auc'].values
-        auc_f = df_full .loc[df_full ['Classifier'] == model, 'val_auc'].values
+        wilcoxon_statistic, p_two_sided = wilcoxon(gland_auc, full_auc)
+        p_one_sided = one_sided_from_two_sided(wilcoxon_statistic, p_two_sided, direction=+1)
 
-        # Wilcoxon (dos colas)
-        w_stat, p_two = wilcoxon(auc_g, auc_f)
-        # Wilcoxon unilateral H1: glándula > full
-        p_one = one_sided_from_two_sided(w_stat, p_two, direction=+1)
+        gland_median = np.median(gland_auc)
+        full_median = np.median(full_auc)
+        gland_iqr = interquartile_range(gland_auc)
+        full_iqr = interquartile_range(full_auc)
+        better_view = "gland-only" if gland_median > full_median else "full-volume"
 
-        # Estadísticos descriptivos
-        med_g, med_f = np.median(auc_g), np.median(auc_f)
-        iqr_g, iqr_f = iqr(auc_g), iqr(auc_f)
-        diff_dir = 'glándula' if med_g > med_f else 'imagen completa'
+        model_dir = output_dir / model_name
+        model_dir.mkdir(parents=True, exist_ok=True)
 
-        # Informe por modelo
-        mdl_dir = os.path.join(outdir, model)
-        os.makedirs(mdl_dir, exist_ok=True)
-        with open(os.path.join(mdl_dir, 'results.txt'), 'w', encoding='utf-8') as f:
-            f.write(f"=== {model}: glándula vs. imagen completa ===\n\n")
-            f.write("AUC (mediana [IQR])\n")
-            f.write(f"  • Glándula............. {med_g:.4f} [{iqr_g:.4f}]\n")
-            f.write(f"  • Imagen completa...... {med_f:.4f} [{iqr_f:.4f}]\n\n")
-            f.write("Test de Wilcoxon pareado (dos colas)\n")
-            f.write(f"  W = {w_stat:.4f},  p = {p_two:.4e}\n")
-            f.write("Conclusión: " +
-                    ("DIFERENCIA SIGNIFICATIVA" if p_two < alpha else "no significativa") +
-                    f" (α = {alpha})\n\n")
-            f.write("Wilcoxon unilateral (H₁: glándula > full)\n")
-            f.write(f"  p = {p_one:.4e}\n\n")
-            f.write("Resumen:\n")
-            if p_two < alpha:
-                f.write(f"  El enfoque con mayor mediana de AUC es **{diff_dir}**.\n")
-            else:
-                f.write("  No se detectan diferencias significativas entre enfoques.\n")
+        summary_lines = [
+            f"=== {model_name}: gland-only vs full-volume ===",
+            "",
+            "Validation AUC (median [IQR])",
+            f"  - Gland-only:  {gland_median:.4f} [{gland_iqr:.4f}]",
+            f"  - Full-volume: {full_median:.4f} [{full_iqr:.4f}]",
+            "",
+            "Paired Wilcoxon test (two-sided)",
+            f"  W = {wilcoxon_statistic:.4f}, p = {p_two_sided:.4e}",
+            f"  Conclusion: {'SIGNIFICANT DIFFERENCE' if p_two_sided < alpha else 'not significant'} (alpha={alpha})",
+            "",
+            "One-sided Wilcoxon test (H1: gland-only > full-volume)",
+            f"  p = {p_one_sided:.4e}",
+            "",
+            "Summary",
+            (
+                f"  The higher median validation AUC was obtained by the {better_view} approach."
+                if p_two_sided < alpha
+                else "  No statistically significant difference was detected between both views."
+            ),
+        ]
+        (model_dir / "results.txt").write_text("\n".join(summary_lines), encoding="utf-8")
 
-        # Boxplot
         plt.figure(figsize=(6, 4))
-        plt.boxplot([
-            auc_g,
-            auc_f
-        ],
-            labels=['Glándula', 'Imagen\ncompleta'],
-            boxprops=dict(color='black'),
-            medianprops=dict(color='black'),
-            whiskerprops=dict(color='black'),
-            capprops=dict(color='black'),
-            flierprops=dict(color='black'))
-        plt.ylabel("AUC en validación")
-        plt.title(f"{model}: AUC (Wilcoxon p={p_two:.3f})")
+        plt.boxplot(
+            [gland_auc, full_auc],
+            labels=["Gland-only", "Full\nvolume"],
+            boxprops=dict(color="black"),
+            medianprops=dict(color="black"),
+            whiskerprops=dict(color="black"),
+            capprops=dict(color="black"),
+            flierprops=dict(color="black"),
+        )
+        plt.ylabel("Validation AUC")
+        plt.title(f"{model_name}: paired Wilcoxon p={p_two_sided:.3f}")
         plt.tight_layout()
-        plt.savefig(os.path.join(mdl_dir, 'boxplot.png'), dpi=300)
+        plt.savefig(model_dir / "boxplot.png", dpi=300)
         plt.close()
 
 
 def main():
+    """CLI entrypoint."""
+
     parser = argparse.ArgumentParser(
-        description="Compara AUC de modelos entrenados con dos enfoques distintos"
+        description="Compare validation AUC between gland-only and full-volume radiomics models."
     )
     parser.add_argument(
-        '--gland_csv',
-        default='../../../results/radiomics/most_discriminant/gland/resultados_features_all_gland_most_discriminant.csv',
-        help="CSV con resultados del modelo (sólo glándula)"
+        "--gland_csv",
+        default="results/radiomics/most_discriminant/gland/results_features_all_gland_most_discriminant.csv",
+        help="CSV file with gland-only radiomics results.",
     )
     parser.add_argument(
-        '--full_csv',
-        default='../../../results/radiomics/most_discriminant/full/resultados_features_all_full_most_discriminant.csv',
-        help="CSV con resultados del modelo (imagen completa)"
+        "--full_csv",
+        default="results/radiomics/most_discriminant/full/results_features_all_full_most_discriminant.csv",
+        help="CSV file with full-volume radiomics results.",
     )
     parser.add_argument(
-        '--output_dir',
-        default='../../../results/radiomics/most_discriminant/gland_vs_full',
-        help="Directorio donde guardar los resultados"
+        "--output_dir",
+        default="results/radiomics/most_discriminant/gland_vs_full",
+        help="Directory where the comparison outputs will be saved.",
     )
     args = parser.parse_args()
 
     compare_models(args.gland_csv, args.full_csv, args.output_dir)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

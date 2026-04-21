@@ -1,62 +1,88 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
-import monai
-from tqdm import tqdm
-import os
-import glob
-import json
-import importlib
-import sys
-import random
-import argparse
-from sklearn.model_selection import StratifiedGroupKFold
+from __future__ import annotations
 
+import argparse
+import glob
+import importlib
+import json
+import os
+import random
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+COMMON_DIR = PROJECT_ROOT / "train" / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.append(str(COMMON_DIR))
+
+import matplotlib.pyplot as plt
+import monai
+import numpy as np
+import pandas as pd
+import torch
+from tqdm import tqdm
+
+from runtime_utils import load_splits, resolve_project_path
 from z_data_loader_for_explicability_roi import MyDataLoader
 
-plt.style.use('dark_background')
-plt.rcParams['figure.figsize'] = (12, 8)
+plt.style.use("dark_background")
+plt.rcParams["figure.figsize"] = (12, 8)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Utilizando dispositivo: {device}")
+print(f"Using device: {device}")
 
 def parse_arguments():
-    """Parsea los argumentos de línea de comandos."""
-    parser = argparse.ArgumentParser(description="Análisis de interpretabilidad de modelos de deep learning")
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Interpretability analysis for deep learning models.")
     
-    parser.add_argument("--model-type", type=str, default="config1",
-                        help="Tipo de modelo a analizar")
+    parser.add_argument("--model-type", type=str, default="config1", help="Model configuration to analyse.")
     
-    parser.add_argument("--preselected-indices", type=str, default=None,
-                        help="Índices de muestra preseleccionados (ej: 5,23,42)")
+    parser.add_argument(
+        "--preselected-indices",
+        type=str,
+        default=None,
+        help="Comma-separated sample indices to analyse directly (for example: 5,23,42).",
+    )
     
     parser.add_argument("--criteria", type=str, default="correct_class1",
                         choices=["correct_class0", "correct_class1", "incorrect", "high_confidence", "any"],
-                        help="Criterio para seleccionar muestras")
+                        help="Rule used to select validation samples for analysis.")
     
-    parser.add_argument("--max-samples", type=int, default=3,
-                        help="Número máximo de muestras a analizar")
+    parser.add_argument("--max-samples", type=int, default=3, help="Maximum number of samples to analyse.")
     
-    parser.add_argument("--skip-gradcam", action="store_true",
-                        help="Si se especifica, no se calcula GradCAM")
+    parser.add_argument("--skip-gradcam", action="store_true", help="Skip Grad-CAM generation.")
     
-    parser.add_argument("--skip-occlusion", action="store_true",
-                        help="Si se especifica, no se calculan mapas de oclusión")
+    parser.add_argument("--skip-occlusion", action="store_true", help="Skip occlusion sensitivity maps.")
     
-    parser.add_argument("--skip-aggregated", action="store_true",
-                        help="Si se especifica, no se utilizan mapas agregados")
+    parser.add_argument("--skip-aggregated", action="store_true", help="Skip aggregated interpretability maps.")
     
-    parser.add_argument("--max-attempts", type=int, default=100,
-                        help="Número máximo de intentos para encontrar muestras aleatorias")
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=100,
+        help="Maximum attempts when searching for random candidate samples.",
+    )
     
-    parser.add_argument("--split", type=int, default=None,
-                        help="Split específico a usar (si no se especifica, se usa el mejor split)")
+    parser.add_argument(
+        "--split",
+        type=int,
+        default=None,
+        help="Validation split to analyse. If omitted, the split with the best validation AUC is used.",
+    )
     
-    parser.add_argument("--project-root", type=str, default=os.path.abspath("../../.."),
-                        help="Ruta raíz del proyecto")
+    parser.add_argument(
+        "--project-root",
+        type=str,
+        default=str(PROJECT_ROOT),
+        help="Project root directory.",
+    )
     
-    parser.add_argument("--output-dir", type=str, default="../../../results/deep_learning/interpretability",
-                        help="Directorio donde guardar los resultados")
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="results/deep_learning/interpretability",
+        help="Directory where interpretability artefacts will be saved.",
+    )
     
     args = parser.parse_args()
 
@@ -70,30 +96,28 @@ def parse_arguments():
 
 def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_root=None):
     """
-    Carga un modelo y recupera los datos de test correspondientes a un split específico.
+    Load a trained model and retrieve the validation subset for a specific persisted split.
     
     Args:
         model_dir: Directorio donde se encuentra el modelo
         csv_path: Ruta al CSV de datos
-        split_to_use: Split específico a usar como test (si es None, usa el mejor split)
+        split_to_use: Validation split index to analyse. If None, the best validation split is used.
     
     Returns:
         model: Modelo cargado
-        test_dataloader: DataLoader con los datos de test
+        validation_dataloader: DataLoader with the persisted validation subset
     """
-    # Cargar configuración desde config.json
-    config_path = os.path.join(project_root, "train/deep_learning/1_modeling/config.json")
-    with open(config_path, 'r') as f:
+    config_path = resolve_project_path(project_root, "train/deep_learning/1_modeling/config.json")
+    with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
     
     # Obtener configuración para este modelo específico
     model_type = os.path.basename(model_dir)
     if model_type not in config:
-        raise ValueError(f"Tipo de modelo {model_type} no encontrado en config.json")
+        raise ValueError(f"Model type '{model_type}' was not found in config.json.")
     
     model_config = config[model_type]
 
-    # Importar dinámicamente la clase del modelo
     model_class_path = model_config["model"]
     module_path, class_name = model_class_path.rsplit(".", 1)
     module = importlib.import_module(module_path)
@@ -102,14 +126,10 @@ def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_roo
     # Crear instancia del modelo
     model = model_class(**model_config["model_args"])
     
-    # Determinar qué modelo cargar (mejor overall o específico de un split)
     if split_to_use is None:
-        # Cargar el mejor modelo overall
         model_path = os.path.join(model_dir, "best_overall_model.pth")
-        # Intentar determinar cuál fue el mejor split usado para este modelo
-        base_dir = os.path.dirname(os.path.dirname(model_dir))  # Sube dos niveles (para saltar "models")
+        base_dir = os.path.dirname(os.path.dirname(model_dir))
         results_dir = os.path.join(base_dir, "results", os.path.basename(model_dir))
-        print(results_dir)
         split_files = glob.glob(os.path.join(results_dir, "split_*_results.csv"))
         best_auc = -np.inf
         best_split = None
@@ -123,47 +143,40 @@ def load_model_and_test_data(model_dir, csv_path, split_to_use=None, project_roo
                 best_split = split_num
         
         split_to_use = best_split
-        print(f"Usando el split {split_to_use} como test (mejor AUC: {best_auc:.4f})")
+        print(f"Using validation split {split_to_use} (best validation AUC: {best_auc:.4f})")
     else:
-        # Cargar un modelo específico de un split
         model_path = os.path.join(model_dir, f"best_model_split_{split_to_use}.pth")
     
-    # Cargar pesos del modelo
     model.load_state_dict(torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu")))
     model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     model.eval()
-    
-    # Preparar datos
+
     data_loader = MyDataLoader(
         csv_path=csv_path,
         input_shape=(128, 128, 32),  
         config={"batch_size": 1, "num_workers": 4},
     )
-    
-    # Obtener todos los datos
+
     all_data = data_loader.get_all_data()
-    
-    # Extraer etiquetas y IDs de paciente para validación cruzada estratificada
-    all_labels = [int(torch.argmax(item["label"]).item()) for item in all_data]
-    patient_ids = [item["patient_id"] for item in all_data]
-    
-    # Crear el objeto de validación cruzada estratificada por grupos (pacientes)
-    n_splits = 5  # Ajustar según tu entrenamiento original
-    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    
-    # Obtener los índices del split que queremos usar como test
-    splits = list(splitter.split(all_data, all_labels, groups=patient_ids))
-    _, test_idx = splits[split_to_use - 1]  # Restamos 1 porque los splits se numeran desde 1 en el script original
-    
-    # Obtener datos de test
-    test_subset = [all_data[i] for i in test_idx]
-    
-    # Crear dataset y dataloader para test
+
+    split_file = resolve_project_path(
+        project_root,
+        os.path.join(
+            "artifacts",
+            "deep_learning",
+            "gland",
+            "splits",
+            f"{Path(csv_path).stem}_gland_5fold_seed42.json",
+        ),
+    )
+    split_bundle = load_splits(split_file)
+    validation_indices = split_bundle["splits"][split_to_use - 1]["validation_indices"]
+    validation_subset = [all_data[i] for i in validation_indices]
+
     test_dataset = monai.data.Dataset(
-        data=test_subset, 
+        data=validation_subset,
         transform=data_loader.get_transforms(augment=False)
     )
-    
     test_dataloader = monai.data.DataLoader(
         test_dataset,
         batch_size=1,  
@@ -951,7 +964,7 @@ def ejecutar_todos_los_analisis(
 if __name__ == "__main__":
     args = parse_arguments()
 
-    # 1. Define paths relevantes según tu proyecto
+    # 1. Resolve the project-specific paths.
     model_base_dir = os.path.join(args.project_root, "artifacts/deep_learning/gland/models/", args.model_type)
     csv_path = os.path.join(args.project_root, "artifacts", "data.csv")
     model_results_dir = os.path.join(args.output_dir, args.model_type)
@@ -959,7 +972,7 @@ if __name__ == "__main__":
     maps_dir = os.path.join(model_results_dir, "OcclusionSensitivity", "individual_maps")
     sensitivity_maps_dir = maps_dir
 
-    # 2. Carga el modelo y el dataloader
+    # 2. Load the model and the persisted validation DataLoader.
     model, test_dataloader, split_to_use = load_model_and_test_data(
         model_base_dir,
         csv_path,
@@ -967,12 +980,12 @@ if __name__ == "__main__":
         project_root=args.project_root
     )
 
-    # 3. Calcula (si es necesario) los mapas de oclusión y carga mapas agregados
+    # 3. Compute occlusion maps if needed and load aggregated maps.
     calculate_occlusion_sensitivity(model, test_dataloader, maps_dir, occlusion_dir)
     agg_maps_path = os.path.join(occlusion_dir, "aggregated_heatmaps.pth")
     maps = torch.load(agg_maps_path) if os.path.exists(agg_maps_path) else None
 
-    # 4. Selección de muestras
+    # 4. Select validation samples for the analysis.
     selected_info = seleccionar_indices_muestras(
         dataloader=test_dataloader,
         model=model,
@@ -985,17 +998,17 @@ if __name__ == "__main__":
         verbose=True
     )
     if not selected_info:
-        print("No se han seleccionado muestras para análisis.")
+        print("No validation samples were selected for analysis.")
         sys.exit(1)
 
-    # 5. Guardar imágenes base (opcional, pon aquí tu llamada si quieres)
+    # 5. Save the baseline full and ROI images.
     guardar_imagenes_full_y_roi(
         dataloader=test_dataloader,
         selected_info=selected_info,
         margin=20
     )
 
-    # 6. Ejecutar los análisis principales (sólo análisis)
+    # 6. Run the main interpretability analyses.
     ejecutar_todos_los_analisis(
         model=model,
         dataloader=test_dataloader,

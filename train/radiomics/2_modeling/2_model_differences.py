@@ -1,227 +1,167 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Run non-parametric statistical comparisons across radiomics classifiers."""
 
-"""
-Script para la comparación estadística de modelos de clasificación.
-
-Este script realiza tests estadísticos no paramétricos para determinar
-si existen diferencias significativas en el rendimiento de diferentes
-clasificadores, utilizando el test de Friedman como prueba global y
-el test de Wilcoxon con corrección para comparaciones múltiples como
-test post-hoc para comparaciones por pares.
-"""
+from __future__ import annotations
 
 import argparse
-import os
-import pandas as pd
-import numpy as np
+from pathlib import Path
 
-import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')
-import scienceplots
-
-plt.style.use(['science', 'grid'])
-dpi = 300
-
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from scipy.stats import friedmanchisquare, wilcoxon
 from statsmodels.stats.multitest import multipletests
 
+matplotlib.use("Agg")
+try:
+    import scienceplots  # noqa: F401
+
+    plt.style.use(["science", "grid"])
+except ModuleNotFoundError:
+    plt.style.use("default")
+
+
 def main():
-    """
-    Función principal que coordina el análisis estadístico comparativo de clasificadores.
-    - Carga datos de rendimiento de modelos
-    - Realiza el test global de Friedman
-    - Si es significativo, ejecuta comparaciones post-hoc por pares
-    - Genera visualizaciones de resultados
-    """
+    """Load fold metrics, run Friedman/Wilcoxon tests, and export English reports and plots."""
 
-    # --- Configuración de argumentos de línea de comandos ---    
     parser = argparse.ArgumentParser(
-        description="Comparación estadística de clasificadores (test global y post-hoc)."
+        description="Compare classifier performance with Friedman and Wilcoxon tests."
     )
-    parser.add_argument("--csv_preds", type=str, help="Ruta al CSV con predicciones", required=True)
-    parser.add_argument("--csv_results", type=str, help="Ruta al CSV con las métricas por fold", required=True)
-    parser.add_argument("--metric", type=str, default="val_auc", help="Métrica a comparar entre clasificadores")
-    parser.add_argument("--alpha", type=float, default=0.05, help="Nivel de significancia")
-    parser.add_argument("--outdir", type=str, default=".", help="Directorio de salida")
-
+    parser.add_argument("--csv_preds", type=str, required=True, help="Path to the fold prediction CSV.")
+    parser.add_argument("--csv_results", type=str, required=True, help="Path to the fold metric CSV.")
+    parser.add_argument("--metric", type=str, default="val_auc", help="Metric column to compare.")
+    parser.add_argument("--alpha", type=float, default=0.05, help="Significance level.")
+    parser.add_argument("--outdir", type=str, default=".", help="Output directory.")
     args = parser.parse_args()
-    
-    # --- Carga de datos ---
+
+    output_dir = Path(args.outdir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     df_results = pd.read_csv(args.csv_results)
-   
-    metric_col = args.metric  # Métrica a comparar (por defecto, AUC)
-    alpha = args.alpha        # Nivel de significancia para los tests
-
-    # Obtener lista de clasificadores y ordenar resultados
-    classifiers = df_results["Classifier"].unique()
-    df_results = df_results.sort_values(by=["Classifier", "Fold"])
-
-    # Crear tabla pivote: filas=folds, columnas=clasificadores, valores=métrica seleccionada
-    pivot_df = df_results.pivot_table(
-        index="Fold", 
-        columns="Classifier", 
-        values=metric_col
+    metric_column = args.metric
+    pivot_df = (
+        df_results.sort_values(by=["Classifier", "Fold"])
+        .pivot_table(index="Fold", columns="Classifier", values=metric_column)
+        .dropna(axis=0)
     )
 
-    # Verificar y manejar valores faltantes
-    if pivot_df.isnull().any().any():
-        print("Advertencia: existen valores NaN en la tabla.")
-        pivot_df.dropna(axis=0, inplace=True)
-    
-    # Ordenar clasificadores por su rendimiento mediano (descendente)
-    median_auc_per_clf = df_results.groupby("Classifier")[metric_col].median().sort_values(ascending=False)
-    ordered_classifiers = median_auc_per_clf.index.tolist()
+    ordered_classifiers = (
+        df_results.groupby("Classifier")[metric_column].median().sort_values(ascending=False).index.tolist()
+    )
     pivot_df = pivot_df[ordered_classifiers]
 
-    # --- Preparar datos para el test de Friedman ---
-    data_for_friedman = []
-    for clf in pivot_df.columns:
-        data_for_friedman.append(pivot_df[clf].values)
+    friedman_inputs = [pivot_df[classifier].values for classifier in pivot_df.columns]
+    friedman_statistic, friedman_p = friedmanchisquare(*friedman_inputs)
 
-    # --- Test de Friedman (test global) ---
-    # Determina si existe al menos una diferencia significativa entre todos los clasificadores
-    stat, p_value = friedmanchisquare(*data_for_friedman)
+    summary_lines = [
+        "=================================",
+        f"FRIEDMAN TEST for metric: {metric_column}",
+        f"Statistic: {friedman_statistic:.4f}, p-value: {friedman_p:.4e}",
+        f"alpha = {args.alpha}",
+    ]
 
-    # --- Generar texto de resumen para los resultados ---
-    summary_text = []
-    summary_text.append("=================================")
-    summary_text.append(f"TEST DE FRIEDMAN para métrica: {metric_col}")
-    summary_text.append(f"Estadístico: {stat:.4f}, p-value: {p_value:.4e}")
-    summary_text.append(f"alpha = {alpha}")
-    
-    if p_value < alpha:
-        summary_text.append("=> HAY diferencias estadísticamente significativas entre los clasificadores (rechazamos H0).")
+    if friedman_p < args.alpha:
+        summary_lines.append(
+            "=> There are statistically significant differences across classifiers (reject H0)."
+        )
     else:
-        summary_text.append("=> NO se evidencian diferencias estadísticamente significativas entre los clasificadores (no se rechaza H0).")
-    summary_text.append("=================================\n")
-    
-    # --- Comparaciones post-hoc por pares (si el test global es significativo) ---
+        summary_lines.append(
+            "=> No statistically significant differences were detected across classifiers (fail to reject H0)."
+        )
+    summary_lines.append("=================================\n")
+
     pairwise_matrix = None
-    if p_value < alpha:
-        clfs = pivot_df.columns.tolist()
-        n_clfs = len(clfs)
-        
-        # Matriz para almacenar p-values de comparaciones por pares
-        pairwise_matrix = np.ones((n_clfs, n_clfs))
-        
-        pvals = []
+    if friedman_p < args.alpha:
+        classifiers = pivot_df.columns.tolist()
+        pairwise_matrix = np.ones((len(classifiers), len(classifiers)))
+
+        raw_p_values = []
         pairs = []
-        
-        # Realizar todas las comparaciones por pares posibles
-        for i in range(n_clfs):
-            for j in range(i+1, n_clfs):
-                scores_i = pivot_df.iloc[:, i].values  # Valores de métrica para clasificador i
-                scores_j = pivot_df.iloc[:, j].values  # Valores de métrica para clasificador j
-                
-                # Test de Wilcoxon para muestras pareadas (dos colas)
-                # Evalúa si las distribuciones de dos clasificadores son diferentes
-                w_stat, p_val_pair = wilcoxon(scores_i, scores_j, alternative='two-sided')
-                pvals.append(p_val_pair)
-                pairs.append((i, j))
+        for i in range(len(classifiers)):
+            for j in range(i + 1, len(classifiers)):
+                statistic, pair_p = wilcoxon(
+                    pivot_df.iloc[:, i].values,
+                    pivot_df.iloc[:, j].values,
+                    alternative="two-sided",
+                )
+                raw_p_values.append(pair_p)
+                pairs.append((i, j, statistic))
 
-        # Corrección de Holm para comparaciones múltiples
-        reject_array, pvals_corrected, _, _ = multipletests(pvals, alpha=alpha, method='holm')
-        
-        # Llenar la matriz de p-values corregidos
-        for (i, j), p_corr, reject_bool in zip(pairs, pvals_corrected, reject_array):
-            pairwise_matrix[i, j] = p_corr
-            pairwise_matrix[j, i] = p_corr
-        
-        # Añadir resultados de comparaciones por pares al resumen
-        summary_text.append("Resultados comparaciones 2 a 2 (Wilcoxon + corrección múltiple):")
-        all_pairs_summary = []
-        significant_pairs_summary = []
-        for (i, j), p_corr, reject_bool in zip(pairs, pvals_corrected, reject_array):
-            c1, c2 = clfs[i], clfs[j]
-            result_str = f"    {c1} vs {c2}: p-value corregido={p_corr:.4e}"
+        reject_flags, corrected_p_values, _, _ = multipletests(
+            raw_p_values,
+            alpha=args.alpha,
+            method="holm",
+        )
 
-            if reject_bool: # Si rechazamos la hipótesis nula (hay diferencia significativa)
-                result_str += " => DIFERENCIA SIGNIFICATIVA"
-                significant_pairs_summary.append(result_str)
+        summary_lines.append("Pairwise comparisons (Wilcoxon + Holm correction):")
+        significant_lines = []
+        for (i, j, statistic), corrected_p_value, reject_flag in zip(
+            pairs, corrected_p_values, reject_flags
+        ):
+            pairwise_matrix[i, j] = corrected_p_value
+            pairwise_matrix[j, i] = corrected_p_value
+            result_line = (
+                f"    {classifiers[i]} vs {classifiers[j]} | "
+                f"statistic={statistic:.4f}, corrected p-value={corrected_p_value:.4e}"
+            )
+            if reject_flag:
+                result_line += " => SIGNIFICANT DIFFERENCE"
+                significant_lines.append(result_line)
             else:
-                result_str += " => sin diferencia significativa"
-            all_pairs_summary.append(result_str)
-        
-        # Añadir todas las comparaciones y luego destacar las significativas
-        for line in all_pairs_summary:
-            summary_text.append(line)
+                result_line += " => not significant"
+            summary_lines.append(result_line)
 
-        summary_text.append("\nComparaciones con diferencia significativa:")
-        if significant_pairs_summary:
-            for line in significant_pairs_summary:
-                summary_text.append(line)
-        else:
-            summary_text.append("    No se encontraron diferencias significativas en comparaciones 2 a 2.")
+        summary_lines.append("\nSignificant pairwise comparisons:")
+        summary_lines.extend(significant_lines or ["    None."])
     else:
-        # Si el test global no es significativo, no hay necesidad de hacer comparaciones por pares
-        summary_text.append("No se realizan comparaciones 2 a 2 porque el test global no es significativo.")
-    
-    # --- Guardar el resumen en un archivo de texto ---
-    os.makedirs(args.outdir, exist_ok=True)
-    txt_path = os.path.join(args.outdir, "model_differences_summary.txt")
-    with open(txt_path, "w", encoding="utf-8") as f:
-        for line in summary_text:
-            f.write(line + "\n")
-    
-    print(f"  --> Resumen estadístico guardado en: {txt_path}")
+        summary_lines.append("Pairwise tests were skipped because the global Friedman test was not significant.")
 
-    # --- Gráfico 1: Boxplot de la métrica por clasificador ---
-    boxprops = dict(color='black')                        
-    medianprops = dict(color='black')                     
-    whiskerprops = dict(color='black')                    
-    capprops = dict(color='black')                        
-    flierprops = dict(color='black')                      
-    
+    summary_path = output_dir / "model_differences_summary.txt"
+    summary_path.write_text("\n".join(summary_lines), encoding="utf-8")
+    print(f"Saved statistical summary to: {summary_path}")
+
     plt.figure(figsize=(8, 5))
     pivot_df.boxplot(
-        boxprops=boxprops,
-        medianprops=medianprops,
-        whiskerprops=whiskerprops,
-        capprops=capprops,
-        flierprops=flierprops
+        boxprops=dict(color="black"),
+        medianprops=dict(color="black"),
+        whiskerprops=dict(color="black"),
+        capprops=dict(color="black"),
+        flierprops=dict(color="black"),
     )
-    plt.ylabel("AUC en validación")
-    plt.xticks(rotation=45, ha='right')
-    
-    boxplot_path = os.path.join(args.outdir, "boxplot_metric.png")
-    plt.savefig(boxplot_path, dpi=300, bbox_inches='tight')
+    plt.ylabel("Validation AUC")
+    plt.xticks(rotation=45, ha="right")
+    boxplot_path = output_dir / "boxplot_metric.png"
+    plt.savefig(boxplot_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"  --> Boxplot guardado en: {boxplot_path}")
+    print(f"Saved boxplot to: {boxplot_path}")
 
-    # --- Gráfico 2: Heatmap de p-values post-hoc ---
     if pairwise_matrix is not None:
-        fig, ax = plt.subplots(figsize=(6, 5))
-        ax.grid(False)
-        
-        # Crear mapa de calor con los p-values corregidos
-        cax = ax.imshow(pairwise_matrix, interpolation='nearest', cmap='cividis', aspect='auto')
-        
-        ax.set_xticks(np.arange(len(clfs)))
-        ax.set_yticks(np.arange(len(clfs)))
-        ax.set_xticklabels(clfs, rotation=45, ha="right")
-        ax.set_yticklabels(clfs)
-    
-        ax.set_xticks(np.arange(-0.5, len(clfs), 1), minor=True)
-        ax.set_yticks(np.arange(-0.5, len(clfs), 1), minor=True)
-    
-        ax.grid(which='minor', color='black', linestyle='--', linewidth=1)
-        ax.tick_params(which='minor', bottom=False, left=False)
-    
-        for i in range(len(clfs)):
-            for j in range(len(clfs)):
-                pval_ij = pairwise_matrix[i, j]
-                text_color = "white" if pval_ij < 0.05 else "black"
-                ax.text(j, i, f"{pval_ij:.3f}", ha="center", va="center", color=text_color, fontsize=8)
-    
-        fig.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
-    
-        heatmap_path = os.path.join(args.outdir, "heatmap_pvalues.png")
+        fig, axis = plt.subplots(figsize=(6, 5))
+        axis.grid(False)
+        heatmap = axis.imshow(pairwise_matrix, interpolation="nearest", cmap="cividis", aspect="auto")
+        axis.set_xticks(np.arange(len(classifiers)))
+        axis.set_yticks(np.arange(len(classifiers)))
+        axis.set_xticklabels(classifiers, rotation=45, ha="right")
+        axis.set_yticklabels(classifiers)
+        axis.set_xticks(np.arange(-0.5, len(classifiers), 1), minor=True)
+        axis.set_yticks(np.arange(-0.5, len(classifiers), 1), minor=True)
+        axis.grid(which="minor", color="black", linestyle="--", linewidth=1)
+        axis.tick_params(which="minor", bottom=False, left=False)
+
+        for i in range(len(classifiers)):
+            for j in range(len(classifiers)):
+                value = pairwise_matrix[i, j]
+                text_color = "white" if value < args.alpha else "black"
+                axis.text(j, i, f"{value:.3f}", ha="center", va="center", color=text_color, fontsize=8)
+
+        fig.colorbar(heatmap, ax=axis, fraction=0.046, pad=0.04)
+        heatmap_path = output_dir / "heatmap_pvalues.png"
         plt.tight_layout()
         plt.savefig(heatmap_path, dpi=300)
         plt.close()
-        print(f"  --> Heatmap de p-values guardado en: {heatmap_path}")
+        print(f"Saved p-value heatmap to: {heatmap_path}")
+
 
 if __name__ == "__main__":
     main()
