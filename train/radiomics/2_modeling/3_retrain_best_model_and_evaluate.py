@@ -7,6 +7,7 @@ Optimize, calibrate, and interpret the best radiomics model on a leakage-safe ho
 import os
 import argparse
 import sys
+import time
 import numpy as np
 import pandas as pd
 import re
@@ -14,6 +15,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
 from pathlib import Path
+from datetime import datetime
 
 import matplotlib as mpl
 mpl.use('Agg')
@@ -82,6 +84,28 @@ from train.common.radiomics_utils import (
     resolve_feature_table_path,
     select_radiomics_features,
 )
+
+
+def configure_live_logging() -> None:
+    """Enable line-buffered stdout/stderr so progress appears promptly in SLURM logs."""
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True)
+
+
+def log_progress(message: str) -> None:
+    """Print a timestamped progress message and flush immediately."""
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{timestamp} | INFO | {message}", flush=True)
+
+
+def format_metric(value: float) -> str:
+    """Format numeric metrics consistently for console logging."""
+
+    return "nan" if pd.isna(value) else f"{value:.4f}"
 
 
 ###########################
@@ -875,6 +899,8 @@ def perform_lime_analysis(
 def main():
     """Run leakage-safe hold-out optimization, calibration, and interpretability analysis."""
 
+    configure_live_logging()
+
     parser = argparse.ArgumentParser(
         description=(
             "Train and optimize a radiomics model with a final grouped hold-out test split, "
@@ -984,6 +1010,24 @@ def main():
         default=0.90,
         help="Absolute Pearson-correlation threshold used to prune redundant features.",
     )
+    parser.add_argument(
+        "--selection_n_jobs",
+        type=int,
+        default=-1,
+        help="Number of parallel workers used during training-only feature scoring.",
+    )
+    parser.add_argument(
+        "--search_iterations",
+        type=int,
+        default=50,
+        help="Number of Bayesian optimization iterations for models with a search space.",
+    )
+    parser.add_argument(
+        "--search_n_jobs",
+        type=int,
+        default=-1,
+        help="Number of parallel workers used by BayesSearchCV.",
+    )
     args = parser.parse_args()
     ci_percent = int(args.ci_level * 100)
 
@@ -1007,13 +1051,18 @@ def main():
     csv_stem = Path(data_path).stem
     mode = csv_stem.rsplit("_", 1)[-1]
 
-    print("\nStarting final hold-out optimization.")
-    print(f"  --> Selected model: {selected_model}")
-    print(f"  --> Feature table: {data_path}")
+    log_progress("Starting final hold-out optimization.")
+    log_progress(f"Selected model: {selected_model}")
+    log_progress(f"Feature table: {data_path}")
     if args.variables:
-        print(f"  --> External feature allowlist: {args.variables}")
+        log_progress(f"External feature allowlist: {args.variables}")
     else:
-        print("  --> External feature allowlist: not used")
+        log_progress("External feature allowlist: not used")
+    log_progress(
+        "Optimization settings: "
+        f"n_folds={args.n_folds}, search_iterations={args.search_iterations}, "
+        f"search_n_jobs={args.search_n_jobs}, selection_n_jobs={args.selection_n_jobs}"
+    )
 
     results_root = (PROJECT_ROOT / args.results_base / args.feature_strategy / mode).resolve()
     output_parent_dir = os.path.join(results_root, "best_results", selected_model.lower())
@@ -1023,15 +1072,15 @@ def main():
     train_explicability_dir = os.path.join(explicability_dir, "train")
     test_explicability_dir = os.path.join(explicability_dir, "test")
 
-    # Subdirectorios SHAP y LIME para train
+    # SHAP and LIME subdirectories for training data
     train_shap_dir = os.path.join(train_explicability_dir, "SHAP")
     train_lime_dir = os.path.join(train_explicability_dir, "LIME")
 
-    # Subdirectorios SHAP y LIME para test
+    # SHAP and LIME subdirectories for hold-out test data
     test_shap_dir = os.path.join(test_explicability_dir, "SHAP")
     test_lime_dir = os.path.join(test_explicability_dir, "LIME")
 
-    # Crear directorios si no existen
+    # Create output directories up front
     os.makedirs(output_parent_dir, exist_ok=True)
     os.makedirs(calibration_dir, exist_ok=True)
     os.makedirs(explicability_dir, exist_ok=True)
@@ -1042,16 +1091,16 @@ def main():
     os.makedirs(test_shap_dir, exist_ok=True)
     os.makedirs(test_lime_dir, exist_ok=True)
     
-    print(f"\nOutput directory: {os.path.relpath(output_parent_dir)}")
+    log_progress(f"Output directory: {os.path.relpath(output_parent_dir)}")
 
-    print(f"\nLoading data from: {data_path}")
+    log_progress(f"Loading data from: {data_path}")
     df = pd.read_csv(data_path)
     if "sample_id" in df.columns:
         df = df.set_index("sample_id")
     else:
         df['patient_id_study_id'] = df['patient_id'].astype(str) + '_' + df['study_id'].astype(str)
         df = df.set_index('patient_id_study_id')
-    print(f"Loaded data shape: {df.shape}")
+    log_progress(f"Loaded data shape: {df.shape}")
 
     y = df["label"].values
     groups = df["patient_id"].values
@@ -1063,6 +1112,10 @@ def main():
     y_train_full, y_test = y[train_idx], y[test_idx]
     groups_train_full = groups[train_idx]
     patient_ids_test = groups[test_idx]
+    log_progress(
+        f"Created grouped hold-out split | train n={len(X_train_full)} pos={int(np.sum(y_train_full == 1))} "
+        f"| test n={len(X_test)} pos={int(np.sum(y_test == 1))}"
+    )
 
     if args.variables:
         variables_path = Path(args.variables)
@@ -1087,6 +1140,7 @@ def main():
         minority_samples_per_feature=args.minority_samples_per_feature,
         fdr_alpha=args.fdr_alpha,
         correlation_threshold=args.correlation_threshold,
+        n_jobs=args.selection_n_jobs,
     )
     selection_dir = os.path.join(output_parent_dir, "feature_selection")
     os.makedirs(selection_dir, exist_ok=True)
@@ -1099,11 +1153,14 @@ def main():
 
     X_train_full = X_train_full[selected_features].copy()
     X_test = X_test[selected_features].copy()
-    print(
+    log_progress(
         f"Selected {len(selected_features)} training-only features "
-        f"(FDR candidates: {selection_metadata['n_fdr_features']}, "
-        f"feature cap: {selection_metadata['feature_limit']})."
+        f"(FDR candidates={selection_metadata['n_fdr_features']}, "
+        f"pruned pool={selection_metadata['n_pruned_features']}, "
+        f"feature cap={selection_metadata['feature_limit']})."
     )
+    log_progress(f"Saved training-only feature selection CSV to: {selection_csv_path}")
+    log_progress(f"Saved selected feature list to: {selection_txt_path}")
 
     number_folds = args.n_folds
     score_group = {
@@ -1152,7 +1209,7 @@ def main():
             StandardScaler(),
             VarianceThreshold(),
             RandomForestClassifier(
-                n_jobs=-1,
+                n_jobs=1,
                 class_weight="balanced_subsample",
                 random_state=random_state_value,
             ),
@@ -1178,7 +1235,7 @@ def main():
             SimpleImputer(strategy="median"),
             StandardScaler(),
             VarianceThreshold(),
-            KNeighborsClassifier(n_jobs=-1),
+            KNeighborsClassifier(n_jobs=1),
         )
         param_grid = {
             'kneighborsclassifier__n_neighbors': Integer(2, 8),
@@ -1204,15 +1261,22 @@ def main():
     
     cv = StratifiedGroupKFold(n_splits=number_folds, shuffle=True, random_state=random_state_value)
     if param_grid:
-        print("\nRunning Bayesian hyperparameter optimization with BayesSearchCV...")
+        log_progress(
+            f"Running Bayesian hyperparameter optimization with BayesSearchCV "
+            f"using {number_folds} grouped folds, {args.search_iterations} iterations, "
+            f"and n_jobs={args.search_n_jobs}."
+        )
+        search_start_time = time.perf_counter()
         search = BayesSearchCV(
             estimator=pipe,
             search_spaces=param_grid,
             scoring=score_group,
             refit=score_refit_str,
             cv=cv,
-            n_jobs=-1,
+            n_iter=args.search_iterations,
+            n_jobs=args.search_n_jobs,
             random_state=random_state_value,
+            verbose=2,
         )
         search.fit(X_train_full, y_train_full, groups=groups_train_full)
         best_estimator = search.best_estimator_
@@ -1224,17 +1288,20 @@ def main():
             )
             for key in score_group
         }
-        print("\nOptimization completed.")
-        print(f"  --> Best parameters: {best_params}")
+        search_elapsed = time.perf_counter() - search_start_time
+        log_progress(f"Optimization completed in {search_elapsed / 60:.1f} minutes.")
+        log_progress(f"Best parameters: {best_params}")
+        for key, (mean_test, std_test) in cv_summary.items():
+            log_progress(f"Best CV {key}: {mean_test:.4f} +/- {std_test:.4f}")
     else:
-        print("\nNo hyperparameter search space defined for this model. Fitting the base pipeline directly...")
+        log_progress("No hyperparameter search space defined for this model. Fitting the base pipeline directly...")
         best_estimator = pipe.fit(X_train_full, y_train_full)
         best_params = {}
         cv_summary = {}
 
     estimator_path = os.path.join(output_parent_dir, "best_estimator.pkl")
     joblib.dump(best_estimator, estimator_path)
-    print(f"  --> Best estimator saved to: {os.path.relpath(estimator_path)}")
+    log_progress(f"Best estimator saved to: {os.path.relpath(estimator_path)}")
 
     report_path = os.path.join(output_parent_dir, "report.txt")
     with open(report_path, "w", encoding="utf-8") as f_out:
@@ -1257,7 +1324,7 @@ def main():
             f_out.write("  Hyperparameter search was skipped because this model has no search space.\n")
         f_out.write("\n")
 
-    print("\nEvaluating the uncalibrated model on the hold-out test set...")
+    log_progress("Evaluating the uncalibrated model on the hold-out test set...")
     y_pred_test = best_estimator.predict(X_test)
     p_pre = best_estimator.predict_proba(X_test)[:, 1]
     
@@ -1283,7 +1350,7 @@ def main():
     plt.tight_layout()
     plt.savefig(confusion_fig, dpi=dpi, bbox_inches='tight')
     plt.close()
-    print(f"Confusion matrix saved to: {confusion_fig}")
+    log_progress(f"Confusion matrix saved to: {confusion_fig}")
     
     # Calcular métricas de rendimiento en test
     if hasattr(best_estimator, "predict_proba"):
@@ -1327,6 +1394,13 @@ def main():
         output_path=roc_ci_uncalibrated_fig,
         line_color="black",
     )
+    log_progress(
+        f"Uncalibrated hold-out metrics | "
+        f"AUC={format_metric(auc_)} | F1={format_metric(f1_)} | "
+        f"Balanced Accuracy={format_metric(balacc_)} | MCC={format_metric(mcc_)} | "
+        f"{ci_percent}% AUC CI=[{format_metric(test_ci_uncalibrated['metrics']['auc']['ci_low'])}, "
+        f"{format_metric(test_ci_uncalibrated['metrics']['auc']['ci_high'])}]"
+    )
     
     with open(report_path, "a", encoding="utf-8") as f_out:
         f_out.write("=== Hold-out Test Evaluation (Uncalibrated) ===\n")
@@ -1352,7 +1426,7 @@ def main():
         f_out.write(report_cr)
         f_out.write("\n\n")
     
-    print("\nCalibrating the model with Platt scaling (sigmoid, cv=5)...")
+    log_progress("Calibrating the model with Platt scaling (sigmoid, cv=5)...")
     cal_clf = CalibratedClassifierCV(best_estimator, method="sigmoid", cv=5)
     cal_clf.fit(X_train_full, y_train_full)
     
@@ -1384,7 +1458,7 @@ def main():
     # ax.set_title(f"Calibration Curve (pre), {selected_model}", fontsize=14)
     plt.savefig(calibration_fig_pre, dpi=dpi, bbox_inches='tight')
     plt.close()
-    print(f"  --> Pre-calibration curve saved to: {calibration_fig_pre}")
+    log_progress(f"Pre-calibration curve saved to: {calibration_fig_pre}")
     
     # --- Curva de calibración POST (después de calibrar) ---
     calibration_fig_post = os.path.join(calibration_dir, "calibration_post.png")
@@ -1414,7 +1488,7 @@ def main():
             
     plt.savefig(calibration_fig_post, dpi=dpi, bbox_inches='tight')
     plt.close()
-    print(f"  --> Post-calibration curve saved to: {calibration_fig_post}")
+    log_progress(f"Post-calibration curve saved to: {calibration_fig_post}")
 
     # Métricas de calibración 
     def calibration_error(y_true, y_prob, n_bins=10, norm='l1'):
@@ -1473,6 +1547,11 @@ def main():
     # 3) Brier score
     brier_pre  = brier_score_loss(y_test, p_pre)
     brier_post = brier_score_loss(y_test, p_post)
+    log_progress(
+        f"Calibration summary | post_AUC={format_metric(test_ci_calibrated['metrics']['auc']['point_estimate'])} | "
+        f"ECE pre={format_metric(ece_pre)} post={format_metric(ece_post)} | "
+        f"Brier pre={format_metric(brier_pre)} post={format_metric(brier_post)}"
+    )
 
     # 4) Volcar resultados al informe
     with open(report_path, "a", encoding="utf-8") as f_out:
@@ -1502,6 +1581,10 @@ def main():
         if f1_val > best_f1:
             best_f1 = f1_val
             best_thresh = thresh
+    log_progress(
+        f"Threshold sweep completed | best_threshold={best_thresh:.2f} | "
+        f"best_f1={format_metric(best_f1)}"
+    )
     
     y_pred_best = (cal_clf.predict_proba(X_test)[:, 1] >= best_thresh).astype(int)
     
@@ -1562,6 +1645,11 @@ def main():
         f_out.write(f"PPV: {ppv_best:.3f}\n")
         f_out.write(f"NPV: {npv_best:.3f}\n")
         f_out.write(f"Balanced Accuracy: {balacc_best:.3f}\n\n")
+    log_progress(
+        f"Best-threshold calibrated metrics | AUC={format_metric(auc_best)} | "
+        f"F1={format_metric(f1_best)} | Balanced Accuracy={format_metric(balacc_best)} | "
+        f"MCC={format_metric(mcc_best)}"
+    )
     
     conf_matrix_best = confusion_matrix(y_test, y_pred_best)
     confusion_fig_best = os.path.join(calibration_dir, "confusion_matrix_best_threshold.png")
@@ -1586,6 +1674,7 @@ def main():
     
     with open(report_path, "a", encoding="utf-8") as f_out:
         f_out.write(f"Confusion matrix at calibrated threshold={best_thresh:.2f}: {confusion_fig_best}\n\n")
+    log_progress(f"Best-threshold confusion matrix saved to: {confusion_fig_best}")
         
 
     # ----------------------------------------------------------------------
@@ -1599,7 +1688,7 @@ def main():
     # Extraer el clasificador final
     model_clf = best_estimator.steps[-1][1]
 
-    # Realizar análisis SHAP para conjunto de entrenamiento
+    log_progress("Starting SHAP analysis on the training split...")
     train_success, selected_features, train_shap_values, train_top_features = perform_shap_analysis(
         X_data=X_train_full,
         y_data=y_train_full,
@@ -1610,7 +1699,7 @@ def main():
         dataset_name="training"
     )
 
-    # Realizar análisis SHAP para conjunto de test
+    log_progress("Starting SHAP analysis on the hold-out test split...")
     test_success, _, test_shap_values, test_top_features = perform_shap_analysis(
         X_data=X_test,
         y_data=y_test,
@@ -1621,8 +1710,8 @@ def main():
         dataset_name="test"
     )
 
-    # Realizar análisis LIME para conjunto de entrenamiento
     if train_success:
+        log_progress("Starting LIME analysis on the training split...")
         train_lime_success = perform_lime_analysis(
             X_data=X_train_full,
             y_data=y_train_full,
@@ -1635,8 +1724,8 @@ def main():
         dataset_name="training"
         )
 
-    # Realizar análisis LIME para conjunto de test
     if test_success:
+        log_progress("Starting LIME analysis on the hold-out test split...")
         test_lime_success = perform_lime_analysis(
             X_data=X_test,
             y_data=y_test,
@@ -1649,7 +1738,7 @@ def main():
             dataset_name="test"
         )
             
-    print(f"\nProcess completed. Report saved to: {report_path}")
+    log_progress(f"Process completed. Report saved to: {report_path}")
 
 if __name__ == "__main__":
     main()

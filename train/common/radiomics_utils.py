@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from scipy.stats import mannwhitneyu, shapiro, ttest_ind
 from sklearn import metrics
 from statsmodels.stats.multitest import multipletests
@@ -129,6 +131,23 @@ def score_single_feature(feature_values: pd.Series, labels: np.ndarray) -> dict:
     }
 
 
+def _score_feature_record(
+    feature_name: str,
+    feature_values: pd.Series,
+    labels: np.ndarray,
+    repeat_index: int | None,
+    fold_index: int | None,
+) -> dict:
+    """Compute and package one feature-scoring record."""
+
+    return {
+        "Repeat": repeat_index,
+        "Fold": fold_index,
+        "feature": feature_name,
+        **score_single_feature(feature_values, labels),
+    }
+
+
 def infer_feature_limit(
     y_train: np.ndarray,
     n_samples: int,
@@ -192,19 +211,34 @@ def select_radiomics_features(
     fdr_alpha: float = 0.05,
     correlation_threshold: float = 0.90,
     max_candidate_pool: int | None = None,
+    n_jobs: int | None = None,
 ) -> tuple[list[str], pd.DataFrame, dict]:
     """Select a conservative, training-only radiomics subset with FDR and correlation control."""
 
-    selection_records = []
-    for feature_name in X_train.columns:
-        stats = score_single_feature(X_train[feature_name], y_train)
-        selection_records.append(
-            {
-                "Repeat": repeat_index,
-                "Fold": fold_index,
-                "feature": feature_name,
-                **stats,
-            }
+    if n_jobs is None:
+        n_jobs = max(1, min(8, os.cpu_count() or 1))
+
+    if n_jobs == 1:
+        selection_records = [
+            _score_feature_record(
+                feature_name=feature_name,
+                feature_values=X_train[feature_name],
+                labels=y_train,
+                repeat_index=repeat_index,
+                fold_index=fold_index,
+            )
+            for feature_name in X_train.columns
+        ]
+    else:
+        selection_records = Parallel(n_jobs=n_jobs, prefer="threads", batch_size=32)(
+            delayed(_score_feature_record)(
+                feature_name=feature_name,
+                feature_values=X_train[feature_name],
+                labels=y_train,
+                repeat_index=repeat_index,
+                fold_index=fold_index,
+            )
+            for feature_name in X_train.columns
         )
 
     selection_df = pd.DataFrame(selection_records)
@@ -290,5 +324,6 @@ def select_radiomics_features(
         "n_pruned_features": len(pruned_features),
         "correlation_threshold": correlation_threshold,
         "fdr_alpha": fdr_alpha,
+        "selection_n_jobs": n_jobs,
     }
     return selected_features, selection_df, metadata

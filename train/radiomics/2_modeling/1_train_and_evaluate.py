@@ -17,6 +17,8 @@ import hashlib
 import os
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -66,6 +68,35 @@ try:
 except ModuleNotFoundError:
     plt.style.use("default")
 DPI = 300
+
+
+def configure_live_logging() -> None:
+    """Enable line-buffered stdout/stderr so logs appear promptly in cluster job files."""
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True)
+
+
+def log_progress(message: str) -> None:
+    """Print a timestamped progress message and flush immediately."""
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"{timestamp} | INFO | {message}", flush=True)
+
+
+def format_metric(value: float) -> str:
+    """Format numeric metrics consistently for console logging."""
+
+    return "nan" if pd.isna(value) else f"{value:.4f}"
+
+
+def save_live_results_snapshot(df_results: pd.DataFrame, output_path: Path) -> None:
+    """Persist an intermediate results table so progress is visible while the run is ongoing."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df_results.to_csv(output_path, index=False)
 
 
 def make_safe_slug(value: str) -> str:
@@ -125,14 +156,10 @@ def get_models(random_state: int = 42):
     return models
 
 
-def evaluate_model(
-    model,
+def build_cv_fold_plan(
     X: pd.DataFrame,
     y: np.ndarray,
     groups: np.ndarray,
-    sample_ids: np.ndarray,
-    patient_ids: np.ndarray,
-    study_ids: np.ndarray,
     n_splits: int = 5,
     n_repeats: int = 1,
     base_random_state: int = 42,
@@ -143,15 +170,20 @@ def evaluate_model(
     minority_samples_per_feature: int = 8,
     fdr_alpha: float = 0.05,
     correlation_threshold: float = 0.90,
-):
-    """Run grouped repeated cross-validation and return metrics, predictions, and feature summaries."""
+    selection_n_jobs: int | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Precompute grouped CV splits and training-only feature subsets once for reuse across models."""
 
-    fold_results = []
-    folds_data = []
+    fold_plan = []
     selection_records = []
-
+    total_folds = n_splits * n_repeats
     global_fold_index = 0
+
     for repeat_index in range(1, n_repeats + 1):
+        log_progress(
+            f"Preparing fold plan | repeat {repeat_index}/{n_repeats} "
+            f"with grouped {n_splits}-fold CV."
+        )
         current_random_state = base_random_state + repeat_index - 1
         splitter = StratifiedGroupKFold(
             n_splits=n_splits,
@@ -161,9 +193,18 @@ def evaluate_model(
 
         for train_idx, val_idx in splitter.split(X, y, groups=groups):
             global_fold_index += 1
+            fold_in_repeat = ((global_fold_index - 1) % n_splits) + 1
+            X_train_raw = X.iloc[train_idx].copy()
+            y_train = y[train_idx]
 
-            X_train_raw, X_val_raw = X.iloc[train_idx].copy(), X.iloc[val_idx].copy()
-            y_train, y_val = y[train_idx], y[val_idx]
+            train_positive = int(np.sum(y_train == 1))
+            val_positive = int(np.sum(y[val_idx] == 1))
+            log_progress(
+                f"Preparing fold {global_fold_index}/{total_folds} "
+                f"(repeat {repeat_index}/{n_repeats}, local fold {fold_in_repeat}/{n_splits}) "
+                f"| train n={len(train_idx)} pos={train_positive} "
+                f"| val n={len(val_idx)} pos={val_positive}"
+            )
 
             if feature_strategy == "most_discriminant":
                 selected_features, selection_df, selection_metadata = select_radiomics_features(
@@ -177,6 +218,7 @@ def evaluate_model(
                     minority_samples_per_feature=minority_samples_per_feature,
                     fdr_alpha=fdr_alpha,
                     correlation_threshold=correlation_threshold,
+                    n_jobs=selection_n_jobs,
                 )
                 selection_records.extend(
                     {
@@ -185,91 +227,187 @@ def evaluate_model(
                     }
                     for record in selection_df.to_dict(orient="records")
                 )
-                X_train = X_train_raw[selected_features]
-                X_val = X_val_raw[selected_features]
+                log_progress(
+                    f"Prepared fold {global_fold_index}/{total_folds} "
+                    f"| selected {len(selected_features)} features "
+                    f"(FDR candidates={selection_metadata['n_fdr_features']}, "
+                    f"pruned pool={selection_metadata['n_pruned_features']}, "
+                    f"cap={selection_metadata['feature_limit']})"
+                )
             else:
                 selected_features = X_train_raw.columns.tolist()
-                X_train = X_train_raw
-                X_val = X_val_raw
-
-            fold_model = clone(model)
-            fold_model.fit(X_train, y_train)
-
-            y_train_pred = fold_model.predict(X_train)
-            y_val_pred = fold_model.predict(X_val)
-
-            if hasattr(fold_model, "predict_proba"):
-                y_train_prob = fold_model.predict_proba(X_train)[:, 1]
-                y_val_prob = fold_model.predict_proba(X_val)[:, 1]
-            elif hasattr(fold_model, "decision_function"):
-                y_train_prob = fold_model.decision_function(X_train)
-                y_val_prob = fold_model.decision_function(X_val)
-            else:
-                y_train_prob = None
-                y_val_prob = None
-
-            try:
-                train_auc = roc_auc_score(y_train, y_train_prob) if y_train_prob is not None else np.nan
-            except ValueError:
-                train_auc = np.nan
-
-            try:
-                val_auc = roc_auc_score(y_val, y_val_prob) if y_val_prob is not None else np.nan
-            except ValueError:
-                val_auc = np.nan
-
-            cm = confusion_matrix(y_val, y_val_pred, labels=[0, 1])
-            tn, fp, fn, tp = cm.ravel()
-
-            per_class_precision = precision_score(y_val, y_val_pred, average=None, zero_division=0)
-            per_class_recall = recall_score(y_val, y_val_pred, average=None, zero_division=0)
-            per_class_f1 = f1_score(y_val, y_val_pred, average=None, zero_division=0)
-            per_class_accuracy = []
-            for row_index in range(len(cm)):
-                row_sum = np.sum(cm[row_index, :])
-                per_class_accuracy.append(cm[row_index, row_index] / row_sum if row_sum > 0 else np.nan)
-
-            fold_results.append(
-                {
-                    "Fold": global_fold_index,
-                    "Repeat": repeat_index,
-                    "train_auc": train_auc,
-                    "train_f1": f1_score(y_train, y_train_pred, average="binary", zero_division=0),
-                    "val_auc": val_auc,
-                    "val_mcc": matthews_corrcoef(y_val, y_val_pred),
-                    "val_kappa": cohen_kappa_score(y_val, y_val_pred),
-                    "val_f1_binary": f1_score(y_val, y_val_pred, average="binary", zero_division=0),
-                    "val_f1_macro": f1_score(y_val, y_val_pred, average="macro", zero_division=0),
-                    "val_accuracy": accuracy_score(y_val, y_val_pred),
-                    "val_sensitivity": recall_score(y_val, y_val_pred, pos_label=1, zero_division=0),
-                    "val_specificity": recall_score(y_val, y_val_pred, pos_label=0, zero_division=0),
-                    "val_ppv": precision_score(y_val, y_val_pred, pos_label=1, zero_division=0),
-                    "val_npv": tn / (tn + fn) if (tn + fn) > 0 else np.nan,
-                    "val_balanced_accuracy": balanced_accuracy_score(y_val, y_val_pred),
-                    "num_selected_features": len(selected_features),
-                    "selected_features": selected_features,
-                    "per_class_precision": per_class_precision.tolist(),
-                    "per_class_recall": per_class_recall.tolist(),
-                    "per_class_f1": per_class_f1.tolist(),
-                    "per_class_accuracy": per_class_accuracy,
+                selection_metadata = {
+                    "feature_limit": len(selected_features),
+                    "n_valid_features": len(selected_features),
+                    "n_fdr_features": len(selected_features),
+                    "n_candidate_features": len(selected_features),
+                    "n_pruned_features": len(selected_features),
+                    "correlation_threshold": correlation_threshold,
+                    "fdr_alpha": fdr_alpha,
+                    "selection_n_jobs": selection_n_jobs,
                 }
-            )
+                log_progress(
+                    f"Prepared fold {global_fold_index}/{total_folds} "
+                    f"| using all {len(selected_features)} features."
+                )
 
-            folds_data.append(
+            fold_plan.append(
                 {
                     "fold_index": global_fold_index,
                     "Repeat": repeat_index,
-                    "sample_ids": sample_ids[val_idx].tolist(),
-                    "patient_ids": patient_ids[val_idx].tolist(),
-                    "study_ids": study_ids[val_idx].tolist(),
-                    "y_val": y_val,
-                    "y_val_pred": y_val_pred,
-                    "y_val_prob": y_val_prob,
+                    "fold_in_repeat": fold_in_repeat,
+                    "train_idx": train_idx,
+                    "val_idx": val_idx,
                     "selected_features": selected_features,
+                    "selection_metadata": selection_metadata,
                 }
             )
 
-    return fold_results, {"folds": folds_data}, selection_records
+    return fold_plan, selection_records
+
+
+def evaluate_model(
+    model,
+    classifier_name: str,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    sample_ids: np.ndarray,
+    patient_ids: np.ndarray,
+    study_ids: np.ndarray,
+    fold_plan: list[dict],
+    on_fold_complete=None,
+):
+    """Run grouped repeated cross-validation over a precomputed fold plan."""
+
+    fold_results = []
+    folds_data = []
+    total_folds = len(fold_plan)
+
+    for fold_info in fold_plan:
+        train_idx = fold_info["train_idx"]
+        val_idx = fold_info["val_idx"]
+        repeat_index = fold_info["Repeat"]
+        global_fold_index = fold_info["fold_index"]
+        fold_in_repeat = fold_info["fold_in_repeat"]
+        selected_features = fold_info["selected_features"]
+
+        fold_start_time = time.perf_counter()
+        y_train, y_val = y[train_idx], y[val_idx]
+        train_positive = int(np.sum(y_train == 1))
+        val_positive = int(np.sum(y_val == 1))
+        log_progress(
+            f"{classifier_name} | Fold {global_fold_index}/{total_folds} "
+            f"(repeat {repeat_index}, local fold {fold_in_repeat}) "
+            f"| train n={len(train_idx)} pos={train_positive} "
+            f"| val n={len(val_idx)} pos={val_positive} "
+            f"| features={len(selected_features)}"
+        )
+
+        X_train = X.iloc[train_idx][selected_features].copy()
+        X_val = X.iloc[val_idx][selected_features].copy()
+
+        fold_model = clone(model)
+        fold_model.fit(X_train, y_train)
+
+        y_train_pred = fold_model.predict(X_train)
+        y_val_pred = fold_model.predict(X_val)
+
+        if hasattr(fold_model, "predict_proba"):
+            y_train_prob = fold_model.predict_proba(X_train)[:, 1]
+            y_val_prob = fold_model.predict_proba(X_val)[:, 1]
+        elif hasattr(fold_model, "decision_function"):
+            y_train_prob = fold_model.decision_function(X_train)
+            y_val_prob = fold_model.decision_function(X_val)
+        else:
+            y_train_prob = None
+            y_val_prob = None
+
+        try:
+            train_auc = roc_auc_score(y_train, y_train_prob) if y_train_prob is not None else np.nan
+        except ValueError:
+            train_auc = np.nan
+
+        try:
+            val_auc = roc_auc_score(y_val, y_val_prob) if y_val_prob is not None else np.nan
+        except ValueError:
+            val_auc = np.nan
+
+        cm = confusion_matrix(y_val, y_val_pred, labels=[0, 1])
+        tn, fp, fn, tp = cm.ravel()
+
+        per_class_precision = precision_score(y_val, y_val_pred, average=None, zero_division=0)
+        per_class_recall = recall_score(y_val, y_val_pred, average=None, zero_division=0)
+        per_class_f1 = f1_score(y_val, y_val_pred, average=None, zero_division=0)
+        per_class_accuracy = []
+        for row_index in range(len(cm)):
+            row_sum = np.sum(cm[row_index, :])
+            per_class_accuracy.append(cm[row_index, row_index] / row_sum if row_sum > 0 else np.nan)
+
+        fold_results.append(
+            {
+                "Fold": global_fold_index,
+                "Repeat": repeat_index,
+                "train_auc": train_auc,
+                "train_f1": f1_score(y_train, y_train_pred, average="binary", zero_division=0),
+                "val_auc": val_auc,
+                "val_mcc": matthews_corrcoef(y_val, y_val_pred),
+                "val_kappa": cohen_kappa_score(y_val, y_val_pred),
+                "val_f1_binary": f1_score(y_val, y_val_pred, average="binary", zero_division=0),
+                "val_f1_macro": f1_score(y_val, y_val_pred, average="macro", zero_division=0),
+                "val_accuracy": accuracy_score(y_val, y_val_pred),
+                "val_sensitivity": recall_score(y_val, y_val_pred, pos_label=1, zero_division=0),
+                "val_specificity": recall_score(y_val, y_val_pred, pos_label=0, zero_division=0),
+                "val_ppv": precision_score(y_val, y_val_pred, pos_label=1, zero_division=0),
+                "val_npv": tn / (tn + fn) if (tn + fn) > 0 else np.nan,
+                "val_balanced_accuracy": balanced_accuracy_score(y_val, y_val_pred),
+                "num_selected_features": len(selected_features),
+                "selected_features": selected_features,
+                "per_class_precision": per_class_precision.tolist(),
+                "per_class_recall": per_class_recall.tolist(),
+                "per_class_f1": per_class_f1.tolist(),
+                "per_class_accuracy": per_class_accuracy,
+            }
+        )
+        completed_fold_result = fold_results[-1]
+        elapsed_seconds = time.perf_counter() - fold_start_time
+        running_results_df = pd.DataFrame(fold_results)
+        running_auc_mean = running_results_df["val_auc"].mean()
+        running_auc_median = running_results_df["val_auc"].median()
+        running_bal_acc_mean = running_results_df["val_balanced_accuracy"].mean()
+        log_progress(
+            f"{classifier_name} | Completed fold {global_fold_index}/{total_folds} "
+            f"in {elapsed_seconds:.1f}s | "
+            f"val_auc={format_metric(completed_fold_result['val_auc'])} | "
+            f"val_f1={format_metric(completed_fold_result['val_f1_binary'])} | "
+            f"val_bal_acc={format_metric(completed_fold_result['val_balanced_accuracy'])} | "
+            f"running_mean_auc={format_metric(running_auc_mean)} | "
+            f"running_median_auc={format_metric(running_auc_median)} | "
+            f"running_mean_bal_acc={format_metric(running_bal_acc_mean)}"
+        )
+
+        folds_data.append(
+            {
+                "fold_index": global_fold_index,
+                "Repeat": repeat_index,
+                "sample_ids": sample_ids[val_idx].tolist(),
+                "patient_ids": patient_ids[val_idx].tolist(),
+                "study_ids": study_ids[val_idx].tolist(),
+                "y_val": y_val,
+                "y_val_pred": y_val_pred,
+                "y_val_prob": y_val_prob,
+                "selected_features": selected_features,
+            }
+        )
+        if on_fold_complete is not None:
+            on_fold_complete(
+                classifier_name=classifier_name,
+                fold_result=completed_fold_result,
+                fold_predictions=folds_data[-1],
+                all_fold_results=fold_results,
+                selection_records=None,
+            )
+
+    return fold_results, {"folds": folds_data}
 
 
 def build_flat_prediction_table(predictions_data: list[dict]) -> pd.DataFrame:
@@ -759,6 +897,8 @@ def save_roc_plots(df_results: pd.DataFrame, df_predictions: pd.DataFrame, roc_d
 def main():
     """Entry point for fold-aware radiomics model training and evaluation."""
 
+    configure_live_logging()
+
     parser = argparse.ArgumentParser(
         description="Evaluate radiomics classifiers with repeated grouped cross-validation."
     )
@@ -863,6 +1003,32 @@ def main():
         default=0.90,
         help="Absolute Pearson-correlation threshold used to prune redundant features.",
     )
+    parser.add_argument(
+        "--selection_n_jobs",
+        type=int,
+        default=-1,
+        help=(
+            "Number of parallel workers used during fold-wise univariate feature scoring. "
+            "Increase this on multi-core servers to speed up feature selection."
+        ),
+    )
+    parser.add_argument(
+        "--search_iterations",
+        type=int,
+        default=50,
+        help=(
+            "Number of Bayesian optimization iterations to use when the automatic hold-out "
+            "fine-tuning step is enabled."
+        ),
+    )
+    parser.add_argument(
+        "--search_n_jobs",
+        type=int,
+        default=-1,
+        help=(
+            "Number of parallel workers to use during the automatic hold-out fine-tuning step."
+        ),
+    )
     args = parser.parse_args()
 
     data_root = (PROJECT_ROOT / args.data_pre).resolve()
@@ -893,34 +1059,71 @@ def main():
     experiment_dir = base_dir / mode
     experiment_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Results directory: {experiment_dir}")
-    print(f"Loaded {X.shape[0]} samples and {X.shape[1]} numeric features.")
-    print(f"Feature strategy: {args.feature_strategy}")
+    log_progress(f"Results directory: {experiment_dir}")
+    log_progress(f"Loaded {X.shape[0]} samples and {X.shape[1]} numeric features.")
+    log_progress(
+        f"Feature strategy: {args.feature_strategy} | "
+        f"n_splits={args.n_splits} | n_repeats={args.n_repeats} | "
+        f"bootstrap_iterations={args.bootstrap_iterations}"
+    )
+    log_progress(
+        "Feature selection settings: "
+        f"min_features={args.min_features}, max_features_cap={args.max_features_cap}, "
+        f"samples_per_feature={args.samples_per_feature}, "
+        f"minority_samples_per_feature={args.minority_samples_per_feature}, "
+        f"fdr_alpha={args.fdr_alpha}, correlation_threshold={args.correlation_threshold}, "
+        f"selection_n_jobs={args.selection_n_jobs}"
+    )
 
     all_results = []
     predictions_data = []
     feature_selection_records = []
+    num_models = len(get_models(random_state=42))
+    live_results_path = experiment_dir / f"results_live_{csv_stem}_{args.feature_strategy}.csv"
+    log_progress(f"Live fold-metrics snapshot will be updated at: {live_results_path}")
+    log_progress("Precomputing grouped CV folds and training-only feature subsets for reuse across models...")
+    fold_plan, shared_selection_records = build_cv_fold_plan(
+        X=X,
+        y=y,
+        groups=groups,
+        n_splits=args.n_splits,
+        n_repeats=args.n_repeats,
+        base_random_state=42,
+        feature_strategy=args.feature_strategy,
+        min_features=args.min_features,
+        max_features_cap=args.max_features_cap,
+        samples_per_feature=args.samples_per_feature,
+        minority_samples_per_feature=args.minority_samples_per_feature,
+        fdr_alpha=args.fdr_alpha,
+        correlation_threshold=args.correlation_threshold,
+        selection_n_jobs=args.selection_n_jobs,
+    )
+    log_progress(
+        f"Prepared {len(fold_plan)} reusable folds. "
+        f"Average selected features per fold: "
+        f"{np.mean([len(item['selected_features']) for item in fold_plan]):.1f}"
+    )
 
-    for model_name, model in get_models(random_state=42):
-        print(f"Evaluating {model_name}...")
-        fold_metrics, prediction_bundle, selection_records = evaluate_model(
+    for model_index, (model_name, model) in enumerate(get_models(random_state=42), start=1):
+        log_progress(f"Starting model {model_index}/{num_models}: {model_name}")
+
+        def on_fold_complete(**callback_payload):
+            accumulated_rows = list(all_results) + [
+                {**row, "Classifier": model_name} for row in callback_payload["all_fold_results"]
+            ]
+            live_df = pd.DataFrame(accumulated_rows)
+            save_live_results_snapshot(live_df, live_results_path)
+
+        fold_metrics, prediction_bundle = evaluate_model(
             model=model,
+            classifier_name=model_name,
             X=X,
             y=y,
-            groups=groups,
             sample_ids=sample_ids,
             patient_ids=patient_ids,
             study_ids=study_ids,
-            n_splits=args.n_splits,
-            n_repeats=args.n_repeats,
-            base_random_state=42,
-            feature_strategy=args.feature_strategy,
-            min_features=args.min_features,
-            max_features_cap=args.max_features_cap,
-            samples_per_feature=args.samples_per_feature,
-            minority_samples_per_feature=args.minority_samples_per_feature,
-            fdr_alpha=args.fdr_alpha,
-            correlation_threshold=args.correlation_threshold,
+            fold_plan=fold_plan,
+            on_fold_complete=on_fold_complete,
         )
 
         for fold_metrics_row in fold_metrics:
@@ -928,9 +1131,16 @@ def main():
             all_results.append(fold_metrics_row)
 
         predictions_data.append({"Classifier": model_name, "folds": prediction_bundle["folds"]})
-        for record in selection_records:
-            record["Classifier"] = model_name
-            feature_selection_records.append(record)
+        for record in shared_selection_records:
+            feature_selection_records.append({**record, "Classifier": model_name})
+
+        model_results_df = pd.DataFrame(fold_metrics)
+        log_progress(
+            f"Completed model {model_index}/{num_models}: {model_name} | "
+            f"mean_val_auc={format_metric(model_results_df['val_auc'].mean())} | "
+            f"median_val_auc={format_metric(model_results_df['val_auc'].median())} | "
+            f"mean_val_bal_acc={format_metric(model_results_df['val_balanced_accuracy'].mean())}"
+        )
 
     df_results = pd.DataFrame(all_results)
     fixed_columns = ["Classifier", "Fold", "Repeat"]
@@ -941,7 +1151,7 @@ def main():
     results_filename = f"results_{csv_stem}_{args.feature_strategy}.csv"
     results_path = experiment_dir / results_filename
     df_results.to_csv(results_path, index=False)
-    print(f"Saved fold metrics to: {results_path}")
+    log_progress(f"Saved fold metrics to: {results_path}")
 
     prediction_rows = []
     for item in predictions_data:
@@ -966,12 +1176,12 @@ def main():
     predictions_filename = f"predictions_{csv_stem}_{args.feature_strategy}.csv"
     predictions_path = experiment_dir / predictions_filename
     df_predictions.to_csv(predictions_path, index=False)
-    print(f"Saved fold predictions to: {predictions_path}")
+    log_progress(f"Saved fold predictions to: {predictions_path}")
 
     flat_predictions_df = build_flat_prediction_table(predictions_data)
     flat_predictions_path = experiment_dir / f"oof_predictions_flat_{csv_stem}_{args.feature_strategy}.csv"
     flat_predictions_df.to_csv(flat_predictions_path, index=False)
-    print(f"Saved flat OOF predictions to: {flat_predictions_path}")
+    log_progress(f"Saved flat OOF predictions to: {flat_predictions_path}")
 
     aggregated_predictions_df = aggregate_oof_predictions(
         flat_predictions_df=flat_predictions_df,
@@ -981,7 +1191,7 @@ def main():
         experiment_dir / f"oof_predictions_aggregated_{csv_stem}_{args.feature_strategy}.csv"
     )
     aggregated_predictions_df.to_csv(aggregated_predictions_path, index=False)
-    print(f"Saved aggregated OOF predictions to: {aggregated_predictions_path}")
+    log_progress(f"Saved aggregated OOF predictions to: {aggregated_predictions_path}")
 
     if args.feature_strategy == "most_discriminant" and feature_selection_records:
         feature_selection_dir = experiment_dir / "feature_selection"
@@ -1026,20 +1236,21 @@ def main():
                     file_handle.write(f"{feature_name}\n")
                 file_handle.write("\n")
 
-        print(f"Saved fold-wise feature selection details to: {feature_selection_dir}")
+        log_progress(f"Saved fold-wise feature selection details to: {feature_selection_dir}")
     else:
         variables_path = experiment_dir / "variables_used.txt"
         with variables_path.open("w", encoding="utf-8") as file_handle:
             for feature_name in X.columns:
                 file_handle.write(f"{feature_name}\n")
-        print(f"Saved feature list to: {variables_path}")
+        log_progress(f"Saved feature list to: {variables_path}")
 
     roc_dir = experiment_dir / "roc_curves"
     save_roc_plots(df_results=df_results, df_predictions=df_predictions, roc_dir=roc_dir)
-    print(f"Saved ROC plots to: {roc_dir}")
+    log_progress(f"Saved ROC plots to: {roc_dir}")
 
     bootstrap_results = {}
     for classifier_name in aggregated_predictions_df["Classifier"].unique():
+        log_progress(f"Bootstrapping aggregated patient-level confidence intervals for {classifier_name}...")
         classifier_df = aggregated_predictions_df[
             aggregated_predictions_df["Classifier"] == classifier_name
         ].copy()
@@ -1049,6 +1260,11 @@ def main():
             ci_level=args.ci_level,
             threshold=args.classification_threshold,
             seed=42,
+        )
+        auc_ci = bootstrap_results[classifier_name]["metrics"]["auc"]
+        log_progress(
+            f"{classifier_name} | aggregated patient-level AUC={format_metric(auc_ci['point_estimate'])} "
+            f"| {int(args.ci_level * 100)}% CI=[{format_metric(auc_ci['ci_low'])}, {format_metric(auc_ci['ci_high'])}]"
         )
 
     summary_df = summarize_classifier_performance(
@@ -1064,10 +1280,10 @@ def main():
         output_dir=aggregated_output_dir,
         ci_level=args.ci_level,
     )
-    print(f"Saved aggregated OOF summaries and confidence intervals to: {aggregated_output_dir}")
+    log_progress(f"Saved aggregated OOF summaries and confidence intervals to: {aggregated_output_dir}")
 
     if args.calculate_differences:
-        print("Running statistical comparison across classifiers...")
+        log_progress("Running statistical comparison across classifiers...")
         model_diff_dir = experiment_dir / "model_differences"
         model_diff_dir.mkdir(parents=True, exist_ok=True)
         comparison_script = Path(__file__).resolve().parent / "2_model_differences.py"
@@ -1087,11 +1303,11 @@ def main():
         ]
         subprocess.call(postprocess_cmd)
     else:
-        print("Skipping statistical comparison across classifiers.")
+        log_progress("Skipping statistical comparison across classifiers.")
 
     if args.fine_tune_best_model:
         if len(df_results) == 0:
-            print("Skipping fine-tuning because no evaluation results were produced.")
+            log_progress("Skipping fine-tuning because no evaluation results were produced.")
             return
 
         best_model_name = (
@@ -1112,6 +1328,12 @@ def main():
             str(fine_tune_script),
             "--csv",
             str(data_path),
+            "--data_pre",
+            str(data_root),
+            "--results_base",
+            str(args.results_base),
+            "--feature_strategy",
+            str(args.feature_strategy),
             "--model",
             best_model_cli_name,
             "--bootstrap_iterations",
@@ -1130,8 +1352,14 @@ def main():
             str(args.fdr_alpha),
             "--correlation_threshold",
             str(args.correlation_threshold),
+            "--selection_n_jobs",
+            str(args.selection_n_jobs),
+            "--search_iterations",
+            str(args.search_iterations),
+            "--search_n_jobs",
+            str(args.search_n_jobs),
         ]
-        print(f"Running fine-tuning for the best classifier: {best_model_name}")
+        log_progress(f"Running fine-tuning for the best classifier: {best_model_name}")
         subprocess.call(fine_tune_cmd)
 
 
