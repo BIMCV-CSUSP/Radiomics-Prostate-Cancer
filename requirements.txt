@@ -3,6 +3,7 @@ pandas==2.2.3
 scipy==1.11.4
 scikit-learn==1.5.2
 scikit-optimize==0.10.2
+lightgbm==4.5.0
 statsmodels==0.14.4
 matplotlib==3.9.2
 seaborn==0.13.2

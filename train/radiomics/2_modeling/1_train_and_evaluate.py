@@ -41,6 +41,7 @@ from sklearn.ensemble import (
     GradientBoostingClassifier,
     RandomForestClassifier,
 )
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -55,13 +56,20 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import GroupKFold, RandomizedSearchCV, StratifiedGroupKFold
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+
+try:
+    from lightgbm import LGBMClassifier
+
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
 
 from train.common.radiomics_utils import (
     prepare_numeric_radiomics_matrix,
@@ -87,6 +95,7 @@ DEFAULT_BASE_RANDOM_STATE = 42
 MODEL_NAME_TO_CLI_NAME = {
     "SVM": "SVM",
     "Logistic Regression": "LogisticRegression",
+    "LASSO Logistic Regression": "LassoLogisticRegression",
     "Random Forest": "RandomForest",
     "Extra Trees": "ExtraTrees",
     "Decision Tree": "DecisionTree",
@@ -94,6 +103,8 @@ MODEL_NAME_TO_CLI_NAME = {
     "KNN": "KNN",
     "Gradient Boosting": "GradientBoosting",
     "AdaBoost": "AdaBoost",
+    "LightGBM": "LightGBM",
+    "LDA": "LDA",
 }
 
 
@@ -324,8 +335,110 @@ def get_models(random_state: int = 42):
             "AdaBoost",
             make_pipeline(*base_steps, AdaBoostClassifier(random_state=random_state)),
         ),
+        (
+            "LASSO Logistic Regression",
+            make_pipeline(
+                *base_steps,
+                LogisticRegression(
+                    penalty="l1",
+                    class_weight="balanced",
+                    random_state=random_state,
+                    solver="saga",
+                    max_iter=10000,
+                ),
+            ),
+        ),
+        (
+            "LDA",
+            make_pipeline(*base_steps, LinearDiscriminantAnalysis()),
+        ),
     ]
+
+    if LIGHTGBM_AVAILABLE:
+        models.append(
+            (
+                "LightGBM",
+                make_pipeline(
+                    *base_steps,
+                    LGBMClassifier(
+                        random_state=random_state,
+                        class_weight="balanced",
+                        n_jobs=-1,
+                        verbose=-1,
+                    ),
+                ),
+            )
+        )
+
     return models
+
+
+def get_param_distributions():
+    """Return per-model hyperparameter search spaces for nested RandomizedSearchCV.
+
+    Keys use sklearn Pipeline step prefixes (the lowercased class name inserted by
+    ``make_pipeline``). Models not present here skip tuning and use defaults.
+    """
+
+    distributions = {
+        "SVM": {
+            "svc__C": [0.1, 1.0, 10.0, 100.0],
+            "svc__gamma": ["scale", 0.001, 0.01, 0.1],
+            "svc__kernel": ["rbf"],
+        },
+        "Logistic Regression": {
+            "logisticregression__C": [0.01, 0.1, 1.0, 10.0, 100.0],
+            "logisticregression__l1_ratio": [0.1, 0.3, 0.5, 0.7, 0.9],
+        },
+        "LASSO Logistic Regression": {
+            "logisticregression__C": [0.01, 0.05, 0.1, 0.5, 1.0, 10.0],
+        },
+        "Random Forest": {
+            "randomforestclassifier__n_estimators": [200, 500],
+            "randomforestclassifier__max_depth": [None, 5, 10, 20],
+            "randomforestclassifier__min_samples_leaf": [1, 2, 5],
+            "randomforestclassifier__max_features": ["sqrt", "log2"],
+        },
+        "Extra Trees": {
+            "extratreesclassifier__n_estimators": [200, 500],
+            "extratreesclassifier__max_depth": [None, 5, 10, 20],
+            "extratreesclassifier__min_samples_leaf": [1, 2, 5],
+            "extratreesclassifier__max_features": ["sqrt", "log2"],
+        },
+        "Decision Tree": {
+            "decisiontreeclassifier__max_depth": [3, 5, 10, None],
+            "decisiontreeclassifier__min_samples_leaf": [1, 5, 10],
+            "decisiontreeclassifier__criterion": ["gini", "entropy"],
+        },
+        "KNN": {
+            "kneighborsclassifier__n_neighbors": [3, 5, 7, 11, 15, 21],
+            "kneighborsclassifier__weights": ["uniform", "distance"],
+            "kneighborsclassifier__p": [1, 2],
+        },
+        "Gradient Boosting": {
+            "gradientboostingclassifier__n_estimators": [100, 200],
+            "gradientboostingclassifier__learning_rate": [0.01, 0.05, 0.1],
+            "gradientboostingclassifier__max_depth": [2, 3, 5],
+        },
+        "AdaBoost": {
+            "adaboostclassifier__n_estimators": [50, 100, 200],
+            "adaboostclassifier__learning_rate": [0.5, 1.0],
+        },
+        "LDA": {
+            "lineardiscriminantanalysis__solver": ["lsqr", "eigen"],
+            "lineardiscriminantanalysis__shrinkage": [None, "auto", 0.1, 0.5],
+        },
+    }
+
+    if LIGHTGBM_AVAILABLE:
+        distributions["LightGBM"] = {
+            "lgbmclassifier__n_estimators": [200, 500],
+            "lgbmclassifier__learning_rate": [0.01, 0.05, 0.1],
+            "lgbmclassifier__num_leaves": [15, 31, 63],
+            "lgbmclassifier__min_child_samples": [5, 10, 20],
+        }
+
+    return distributions
 
 
 def build_cv_fold_plan(
@@ -448,6 +561,10 @@ def evaluate_model(
     study_ids: np.ndarray,
     fold_plan: list[dict],
     on_fold_complete=None,
+    param_distributions: dict | None = None,
+    tune_n_iter: int = 20,
+    tune_inner_splits: int = 3,
+    tune_random_state: int = 42,
 ):
     """Run grouped repeated cross-validation over a precomputed fold plan."""
 
@@ -478,8 +595,28 @@ def evaluate_model(
         X_train = X.iloc[train_idx][selected_features].copy()
         X_val = X.iloc[val_idx][selected_features].copy()
 
-        fold_model = clone(model)
-        fold_model.fit(X_train, y_train)
+        fold_best_params = None
+        if param_distributions:
+            inner_groups = patient_ids[train_idx]
+            n_unique_inner_groups = int(len(np.unique(inner_groups)))
+            effective_inner_splits = max(2, min(tune_inner_splits, n_unique_inner_groups))
+            search = RandomizedSearchCV(
+                estimator=clone(model),
+                param_distributions=param_distributions,
+                n_iter=tune_n_iter,
+                scoring="roc_auc",
+                cv=GroupKFold(n_splits=effective_inner_splits),
+                n_jobs=-1,
+                random_state=tune_random_state,
+                refit=True,
+                error_score=np.nan,
+            )
+            search.fit(X_train, y_train, groups=inner_groups)
+            fold_model = search.best_estimator_
+            fold_best_params = search.best_params_
+        else:
+            fold_model = clone(model)
+            fold_model.fit(X_train, y_train)
 
         y_train_pred = fold_model.predict(X_train)
         y_val_pred = fold_model.predict(X_val)
@@ -519,6 +656,7 @@ def evaluate_model(
             {
                 "Fold": global_fold_index,
                 "Repeat": repeat_index,
+                "best_params": json.dumps(fold_best_params, default=str) if fold_best_params else "",
                 "train_auc": train_auc,
                 "train_f1": f1_score(y_train, y_train_pred, average="binary", zero_division=0),
                 "val_auc": val_auc,
@@ -1133,6 +1271,26 @@ def main():
         help="Run the fine-tuning script for the best classifier after training.",
     )
     parser.add_argument(
+        "--tune",
+        action="store_true",
+        help=(
+            "Enable nested hyperparameter tuning per fold using RandomizedSearchCV with "
+            "GroupKFold on patient_id. Applies to all models with a defined search space."
+        ),
+    )
+    parser.add_argument(
+        "--tune_n_iter",
+        type=int,
+        default=20,
+        help="Number of RandomizedSearchCV iterations per fold when --tune is enabled.",
+    )
+    parser.add_argument(
+        "--tune_inner_splits",
+        type=int,
+        default=3,
+        help="Number of inner GroupKFold splits for the nested tuning CV.",
+    )
+    parser.add_argument(
         "--bootstrap_iterations",
         type=int,
         default=1000,
@@ -1399,8 +1557,20 @@ def main():
             f"duplicate validation signatures across repeats={duplicate_validation_folds}"
         )
 
+        param_distributions_by_model = get_param_distributions() if args.tune else {}
+        if args.tune:
+            log_progress(
+                f"Nested tuning enabled: n_iter={args.tune_n_iter}, "
+                f"inner_splits={args.tune_inner_splits}, scoring=roc_auc, groups=patient_id"
+            )
+
         for model_index, (model_name, model) in enumerate(models, start=1):
             log_progress(f"Starting model {model_index}/{num_models}: {model_name}")
+            model_param_dist = param_distributions_by_model.get(model_name) if args.tune else None
+            if args.tune and model_param_dist is None:
+                log_progress(
+                    f"  No search space defined for {model_name}; using default hyperparameters."
+                )
 
             def on_fold_complete(**callback_payload):
                 accumulated_rows = list(all_results) + [
@@ -1419,6 +1589,10 @@ def main():
                 study_ids=study_ids,
                 fold_plan=fold_plan,
                 on_fold_complete=on_fold_complete,
+                param_distributions=model_param_dist,
+                tune_n_iter=args.tune_n_iter,
+                tune_inner_splits=args.tune_inner_splits,
+                tune_random_state=DEFAULT_BASE_RANDOM_STATE,
             )
 
             for fold_metrics_row in fold_metrics:
