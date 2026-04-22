@@ -23,7 +23,10 @@ artifacts/deep_learning/**/results/
 artifacts/deep_learning/**/metadata/
 artifacts/deep_learning/**/splits/
 artifacts/radiomics/concatenated_data/
-results/
+results/radiomics/shared_cache/
+results/**/explicability/
+results/**/SHAP/
+results/**/LIME/
 
 # Large model and report files
 *.pth

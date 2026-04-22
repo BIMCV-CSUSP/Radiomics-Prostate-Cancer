@@ -53,9 +53,15 @@ from sklearn.impute import SimpleImputer
 # Importación de clasificadores
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import (
+    AdaBoostClassifier,
+    ExtraTreesClassifier,
+    GradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
 
 # Herramientas para evaluación y calibración
 from sklearn.calibration import CalibratedClassifierCV, CalibrationDisplay
@@ -932,6 +938,12 @@ def main():
         help="Base directory where hold-out outputs will be written.",
     )
     parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default=None,
+        help="Optional experiment subdirectory used to keep hold-out outputs separate from prior runs.",
+    )
+    parser.add_argument(
         "--feature_strategy",
         type=str,
         default="most_discriminant",
@@ -946,10 +958,13 @@ def main():
             "SVC",
             "LogisticRegression",
             "RandomForest",
+            "ExtraTrees",
+            "DecisionTree",
             "NaiveBayes",
             "GaussianNB",
             "KNN",
             "GradientBoosting",
+            "AdaBoost",
         ],
         help="Classifier to optimize on the training split.",
     )
@@ -1048,6 +1063,16 @@ def main():
     }
     selected_model = model_aliases.get(args.model, args.model)
 
+    experiment_name = None
+    if args.experiment_name:
+        experiment_name = "".join(
+            character.lower() if character.isalnum() else "_"
+            for character in args.experiment_name
+        )
+        while "__" in experiment_name:
+            experiment_name = experiment_name.replace("__", "_")
+        experiment_name = experiment_name.strip("_") or "experiment"
+
     data_root = (PROJECT_ROOT / args.data_pre).resolve()
     data_path = resolve_feature_table_path(
         project_root=PROJECT_ROOT,
@@ -1060,6 +1085,8 @@ def main():
     log_progress("Starting final hold-out optimization.")
     log_progress(f"Selected model: {selected_model}")
     log_progress(f"Feature table: {data_path}")
+    if experiment_name:
+        log_progress(f"Experiment name: {experiment_name}")
     if args.variables:
         log_progress(f"External feature allowlist: {args.variables}")
     else:
@@ -1071,6 +1098,8 @@ def main():
     )
 
     results_root = (PROJECT_ROOT / args.results_base / args.feature_strategy / mode).resolve()
+    if experiment_name:
+        results_root = results_root / experiment_name
     output_parent_dir = os.path.join(results_root, "best_results", selected_model.lower())
     calibration_dir = os.path.join(output_parent_dir, "calibration")
     explicability_dir = os.path.join(output_parent_dir, "explicability")
@@ -1226,6 +1255,41 @@ def main():
             'randomforestclassifier__max_features': Categorical(['sqrt', 'log2', None]),
             'randomforestclassifier__min_samples_split': Integer(2, 20)
         }
+
+    elif selected_model == 'ExtraTrees':
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            ExtraTreesClassifier(
+                n_jobs=1,
+                class_weight="balanced",
+                random_state=random_state_value,
+            ),
+        )
+        param_grid = {
+            'extratreesclassifier__n_estimators': Integer(50, 1024),
+            'extratreesclassifier__max_depth': Integer(1, 20),
+            'extratreesclassifier__max_features': Categorical(['sqrt', 'log2', None]),
+            'extratreesclassifier__min_samples_split': Integer(2, 20)
+        }
+
+    elif selected_model == 'DecisionTree':
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            DecisionTreeClassifier(
+                class_weight="balanced",
+                random_state=random_state_value,
+            ),
+        )
+        param_grid = {
+            'decisiontreeclassifier__criterion': Categorical(['gini', 'entropy', 'log_loss']),
+            'decisiontreeclassifier__max_depth': Integer(1, 20),
+            'decisiontreeclassifier__min_samples_split': Integer(2, 30),
+            'decisiontreeclassifier__min_samples_leaf': Integer(1, 15)
+        }
         
     elif selected_model == 'NaiveBayes':
         pipe = make_pipeline(
@@ -1261,6 +1325,18 @@ def main():
             'gradientboostingclassifier__max_depth': Integer(1, 10),
             'gradientboostingclassifier__subsample': Real(0.5, 1.0),
             'gradientboostingclassifier__max_features': Categorical(['sqrt', 'log2', None])
+        }
+
+    elif selected_model == 'AdaBoost':
+        pipe = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            VarianceThreshold(),
+            AdaBoostClassifier(random_state=random_state_value),
+        )
+        param_grid = {
+            'adaboostclassifier__n_estimators': Integer(25, 512),
+            'adaboostclassifier__learning_rate': Real(1e-4, 1.0, prior='log-uniform')
         }
     else:
         raise ValueError(f"Unknown model '{selected_model}'.")

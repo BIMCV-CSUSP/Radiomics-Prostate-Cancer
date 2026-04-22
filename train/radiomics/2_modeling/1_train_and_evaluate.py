@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
+import joblib
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -33,7 +35,12 @@ import pandas as pd
 import seaborn as sns
 from sklearn import metrics
 from sklearn.base import clone
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import (
+    AdaBoostClassifier,
+    ExtraTreesClassifier,
+    GradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -54,6 +61,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
 
 from train.common.radiomics_utils import (
     prepare_numeric_radiomics_matrix,
@@ -75,6 +83,18 @@ mpl.rcParams["text.usetex"] = False
 plt.rcParams["text.usetex"] = False
 
 DPI = 300
+DEFAULT_BASE_RANDOM_STATE = 42
+MODEL_NAME_TO_CLI_NAME = {
+    "SVM": "SVM",
+    "Logistic Regression": "LogisticRegression",
+    "Random Forest": "RandomForest",
+    "Extra Trees": "ExtraTrees",
+    "Decision Tree": "DecisionTree",
+    "Naive Bayes": "NaiveBayes",
+    "KNN": "KNN",
+    "Gradient Boosting": "GradientBoosting",
+    "AdaBoost": "AdaBoost",
+}
 
 
 def configure_live_logging() -> None:
@@ -131,6 +151,110 @@ def make_safe_slug(value: str) -> str:
     return safe_value.strip("_")
 
 
+def build_model_color_map(classifier_names: list[str]) -> dict[str, str]:
+    """Assign a stable color to each classifier name."""
+
+    ordered_names = list(dict.fromkeys(classifier_names))
+    palette = sns.color_palette("colorblind", n_colors=max(1, len(ordered_names)))
+    return {
+        classifier_name: mpl.colors.to_hex(color_value)
+        for classifier_name, color_value in zip(ordered_names, palette)
+    }
+
+
+def sanitize_experiment_name(value: str) -> str:
+    """Normalize a user-provided experiment tag so it is safe for directory names."""
+
+    safe_value = "".join(character.lower() if character.isalnum() else "_" for character in value)
+    while "__" in safe_value:
+        safe_value = safe_value.replace("__", "_")
+    safe_value = safe_value.strip("_")
+    return safe_value or "experiment"
+
+
+def build_fold_plan_cache_key(
+    *,
+    data_path: Path,
+    n_splits: int,
+    n_repeats: int,
+    base_random_state: int,
+    feature_strategy: str,
+    min_features: int,
+    max_features_cap: int,
+    samples_per_feature: int,
+    minority_samples_per_feature: int,
+    fdr_alpha: float,
+    correlation_threshold: float,
+) -> str:
+    """Build a reproducible cache key for grouped folds and fold-wise feature selection."""
+
+    stat_result = data_path.stat()
+    payload = {
+        "data_path": str(data_path.resolve()),
+        "data_mtime_ns": stat_result.st_mtime_ns,
+        "data_size": stat_result.st_size,
+        "n_splits": n_splits,
+        "n_repeats": n_repeats,
+        "base_random_state": base_random_state,
+        "feature_strategy": feature_strategy,
+        "min_features": min_features,
+        "max_features_cap": max_features_cap,
+        "samples_per_feature": samples_per_feature,
+        "minority_samples_per_feature": minority_samples_per_feature,
+        "fdr_alpha": fdr_alpha,
+        "correlation_threshold": correlation_threshold,
+    }
+    payload_json = json.dumps(payload, sort_keys=True)
+    return hashlib.md5(payload_json.encode("utf-8")).hexdigest()
+
+
+def load_cached_fold_plan(cache_path: Path) -> tuple[list[dict], list[dict]]:
+    """Load a previously saved grouped fold plan and feature-selection payload."""
+
+    cached_payload = joblib.load(cache_path)
+    return cached_payload["fold_plan"], cached_payload["selection_records"]
+
+
+def save_cached_fold_plan(cache_path: Path, fold_plan: list[dict], selection_records: list[dict]) -> None:
+    """Persist a grouped fold plan so future runs can skip fold-wise feature selection."""
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(
+        {
+            "fold_plan": fold_plan,
+            "selection_records": selection_records,
+        },
+        cache_path,
+        compress=3,
+    )
+
+
+def summarize_fold_plan(fold_plan: list[dict], sample_ids: np.ndarray) -> pd.DataFrame:
+    """Create a compact summary of the grouped folds, including validation-set signatures."""
+
+    summary_rows = []
+    for fold_info in fold_plan:
+        train_sample_ids = sample_ids[fold_info["train_idx"]]
+        val_sample_ids = sample_ids[fold_info["val_idx"]]
+        summary_rows.append(
+            {
+                "Fold": fold_info["fold_index"],
+                "Repeat": fold_info["Repeat"],
+                "fold_in_repeat": fold_info["fold_in_repeat"],
+                "n_train": len(fold_info["train_idx"]),
+                "n_val": len(fold_info["val_idx"]),
+                "num_selected_features": len(fold_info["selected_features"]),
+                "train_signature": hashlib.md5(
+                    "||".join(map(str, train_sample_ids)).encode("utf-8")
+                ).hexdigest(),
+                "val_signature": hashlib.md5(
+                    "||".join(map(str, val_sample_ids)).encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+    return pd.DataFrame(summary_rows)
+
+
 def get_models(random_state: int = 42):
     """Build the classifier pipelines used in the radiomics comparison."""
 
@@ -169,11 +293,36 @@ def get_models(random_state: int = 42):
                 ),
             ),
         ),
+        (
+            "Extra Trees",
+            make_pipeline(
+                *base_steps,
+                ExtraTreesClassifier(
+                    n_jobs=-1,
+                    class_weight="balanced",
+                    random_state=random_state,
+                ),
+            ),
+        ),
+        (
+            "Decision Tree",
+            make_pipeline(
+                *base_steps,
+                DecisionTreeClassifier(
+                    class_weight="balanced",
+                    random_state=random_state,
+                ),
+            ),
+        ),
         ("Naive Bayes", make_pipeline(*base_steps, GaussianNB())),
         ("KNN", make_pipeline(*base_steps, KNeighborsClassifier(n_jobs=-1))),
         (
             "Gradient Boosting",
             make_pipeline(*base_steps, GradientBoostingClassifier(random_state=random_state)),
+        ),
+        (
+            "AdaBoost",
+            make_pipeline(*base_steps, AdaBoostClassifier(random_state=random_state)),
         ),
     ]
     return models
@@ -690,7 +839,23 @@ def summarize_classifier_performance(
 
         summary_rows.append(summary_row)
 
-    return pd.DataFrame(summary_rows).sort_values(by="oof_auc", ascending=False)
+    return pd.DataFrame(summary_rows).sort_values(
+        by=["oof_auc", "oof_auc_ci_low", "val_auc_median"],
+        ascending=[False, False, False],
+    )
+
+
+def choose_best_classifier(summary_df: pd.DataFrame) -> pd.Series:
+    """Select the best classifier using aggregated patient-level OOF AUC."""
+
+    if summary_df.empty:
+        raise ValueError("Cannot choose the best classifier from an empty summary table.")
+
+    ranking_df = summary_df.sort_values(
+        by=["oof_auc", "oof_auc_ci_low", "val_auc_median"],
+        ascending=[False, False, False],
+    ).reset_index(drop=True)
+    return ranking_df.iloc[0]
 
 
 def save_aggregated_performance_outputs(
@@ -732,14 +897,7 @@ def save_aggregated_performance_outputs(
                 f"cases={int(row['n_unique_cases'])} | patients={int(row['n_unique_patients'])}\n"
             )
 
-    color_palette = {
-        "SVM": "#0072B2",
-        "Logistic Regression": "#009E73",
-        "Random Forest": "#D55E00",
-        "Naive Bayes": "#CC78BC",
-        "KNN": "#DE8F05",
-        "Gradient Boosting": "#56B4E9",
-    }
+    color_palette = build_model_color_map(summary_df["Classifier"].tolist())
 
     fig, axis = plt.subplots(figsize=(8, 6))
     for _, summary_row in summary_df.iterrows():
@@ -753,7 +911,7 @@ def save_aggregated_performance_outputs(
                 f"(AUC={summary_row['oof_auc']:.3f} "
                 f"[{summary_row['oof_auc_ci_low']:.3f}, {summary_row['oof_auc_ci_high']:.3f}])"
             ),
-            color=color_palette[classifier_name],
+            color=color_palette.get(classifier_name, "#333333"),
         )
 
     axis.plot([0, 1], [0, 1], linestyle="--", color="gray", label="_nolegend_")
@@ -776,7 +934,7 @@ def save_aggregated_performance_outputs(
         axis.plot(
             roc_payload["point_fpr"],
             roc_payload["point_tpr"],
-            color=color_palette[classifier_name],
+            color=color_palette.get(classifier_name, "#333333"),
             label=(
                 f"{classifier_name} "
                 f"(AUC={summary_row['oof_auc']:.3f} "
@@ -788,7 +946,7 @@ def save_aggregated_performance_outputs(
                 roc_payload["grid_fpr"],
                 roc_payload["tpr_ci_low"],
                 roc_payload["tpr_ci_high"],
-                color=color_palette[classifier_name],
+                color=color_palette.get(classifier_name, "#333333"),
                 alpha=0.2,
                 label=f"{int(ci_level * 100)}% bootstrap CI",
             )
@@ -880,14 +1038,7 @@ def save_roc_plots(df_results: pd.DataFrame, df_predictions: pd.DataFrame, roc_d
     optimal_curves.sort(key=lambda item: item["auc"], reverse=True)
     median_curves.sort(key=lambda item: item["auc"], reverse=True)
 
-    color_palette = {
-        "SVM": "#0072B2",
-        "Logistic Regression": "#009E73",
-        "Random Forest": "#D55E00",
-        "Naive Bayes": "#CC78BC",
-        "KNN": "#DE8F05",
-        "Gradient Boosting": "#56B4E9",
-    }
+    color_palette = build_model_color_map(df_results["Classifier"].tolist())
 
     for figure_name, curves in [
         ("roc_best_folds.png", optimal_curves),
@@ -899,7 +1050,7 @@ def save_roc_plots(df_results: pd.DataFrame, df_predictions: pd.DataFrame, roc_d
                 curve["fpr"],
                 curve["tpr"],
                 label=f"{curve['classifier']} (Fold={curve['fold']}, AUC={curve['auc']:.3f})",
-                color=color_palette[curve["classifier"]],
+                color=color_palette.get(curve["classifier"], "#333333"),
             )
 
         axis.plot([0, 1], [0, 1], linestyle="--", color="gray", label="_nolegend_")
@@ -942,6 +1093,15 @@ def main():
         type=str,
         default="results/radiomics",
         help="Base directory where outputs will be written.",
+    )
+    parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default=None,
+        help=(
+            "Optional extra directory level used to keep a run separate from previous experiments. "
+            "Useful when comparing configurations without overwriting prior results."
+        ),
     )
     parser.add_argument(
         "--n_splits",
@@ -1036,6 +1196,20 @@ def main():
         ),
     )
     parser.add_argument(
+        "--selection_cache_dir",
+        type=str,
+        default="results/radiomics/shared_cache",
+        help=(
+            "Shared cache directory used to store grouped fold plans and fold-wise feature selection. "
+            "Runs with the same dataset and selection settings can reuse this cache."
+        ),
+    )
+    parser.add_argument(
+        "--refresh_selection_cache",
+        action="store_true",
+        help="Ignore any saved grouped fold-plan cache and recompute fold-wise feature selection.",
+    )
+    parser.add_argument(
         "--search_iterations",
         type=int,
         default=50,
@@ -1088,6 +1262,8 @@ def main():
     csv_stem = data_path.stem
     mode = csv_stem.rsplit("_", 1)[-1]
     experiment_dir = base_dir / mode
+    if args.experiment_name:
+        experiment_dir = experiment_dir / sanitize_experiment_name(args.experiment_name)
     experiment_dir.mkdir(parents=True, exist_ok=True)
     results_filename = f"results_{csv_stem}_{args.feature_strategy}.csv"
     results_path = experiment_dir / results_filename
@@ -1154,21 +1330,22 @@ def main():
             f"fdr_alpha={args.fdr_alpha}, correlation_threshold={args.correlation_threshold}, "
             f"selection_n_jobs={args.selection_n_jobs}"
         )
+        if args.experiment_name:
+            log_progress(f"Experiment name: {sanitize_experiment_name(args.experiment_name)}")
 
         all_results = []
         predictions_data = []
         feature_selection_records = []
-        num_models = len(get_models(random_state=42))
+        models = get_models(random_state=DEFAULT_BASE_RANDOM_STATE)
+        num_models = len(models)
         live_results_path = experiment_dir / f"results_live_{csv_stem}_{args.feature_strategy}.csv"
         log_progress(f"Live fold-metrics snapshot will be updated at: {live_results_path}")
-        log_progress("Precomputing grouped CV folds and training-only feature subsets for reuse across models...")
-        fold_plan, shared_selection_records = build_cv_fold_plan(
-            X=X,
-            y=y,
-            groups=groups,
+        cache_root = (PROJECT_ROOT / args.selection_cache_dir).resolve()
+        fold_plan_cache_key = build_fold_plan_cache_key(
+            data_path=data_path,
             n_splits=args.n_splits,
             n_repeats=args.n_repeats,
-            base_random_state=42,
+            base_random_state=DEFAULT_BASE_RANDOM_STATE,
             feature_strategy=args.feature_strategy,
             min_features=args.min_features,
             max_features_cap=args.max_features_cap,
@@ -1176,15 +1353,53 @@ def main():
             minority_samples_per_feature=args.minority_samples_per_feature,
             fdr_alpha=args.fdr_alpha,
             correlation_threshold=args.correlation_threshold,
-            selection_n_jobs=args.selection_n_jobs,
+        )
+        fold_plan_cache_path = cache_root / f"fold_plan_{fold_plan_cache_key}.joblib"
+        if fold_plan_cache_path.exists() and not args.refresh_selection_cache:
+            log_progress(f"Loading cached fold plan and feature selection from: {fold_plan_cache_path}")
+            fold_plan, shared_selection_records = load_cached_fold_plan(fold_plan_cache_path)
+        else:
+            log_progress("Precomputing grouped CV folds and training-only feature subsets for reuse across models...")
+            fold_plan, shared_selection_records = build_cv_fold_plan(
+                X=X,
+                y=y,
+                groups=groups,
+                n_splits=args.n_splits,
+                n_repeats=args.n_repeats,
+                base_random_state=DEFAULT_BASE_RANDOM_STATE,
+                feature_strategy=args.feature_strategy,
+                min_features=args.min_features,
+                max_features_cap=args.max_features_cap,
+                samples_per_feature=args.samples_per_feature,
+                minority_samples_per_feature=args.minority_samples_per_feature,
+                fdr_alpha=args.fdr_alpha,
+                correlation_threshold=args.correlation_threshold,
+                selection_n_jobs=args.selection_n_jobs,
+            )
+            save_cached_fold_plan(
+                cache_path=fold_plan_cache_path,
+                fold_plan=fold_plan,
+                selection_records=shared_selection_records,
+            )
+            log_progress(f"Saved grouped fold-plan cache to: {fold_plan_cache_path}")
+
+        fold_plan_summary_df = summarize_fold_plan(fold_plan=fold_plan, sample_ids=sample_ids)
+        fold_plan_summary_path = experiment_dir / "fold_plan_summary.csv"
+        fold_plan_summary_df.to_csv(fold_plan_summary_path, index=False)
+        duplicate_validation_folds = int(
+            len(fold_plan_summary_df) - fold_plan_summary_df["val_signature"].nunique()
         )
         log_progress(
             f"Prepared {len(fold_plan)} reusable folds. "
             f"Average selected features per fold: "
             f"{np.mean([len(item['selected_features']) for item in fold_plan]):.1f}"
         )
+        log_progress(
+            f"Fold-plan summary saved to: {fold_plan_summary_path} | "
+            f"duplicate validation signatures across repeats={duplicate_validation_folds}"
+        )
 
-        for model_index, (model_name, model) in enumerate(get_models(random_state=42), start=1):
+        for model_index, (model_name, model) in enumerate(models, start=1):
             log_progress(f"Starting model {model_index}/{num_models}: {model_name}")
 
             def on_fold_complete(**callback_payload):
@@ -1382,18 +1597,9 @@ def main():
             log_progress("Skipping fine-tuning because no evaluation results were produced.")
             return
 
-        best_model_name = (
-            df_results.groupby("Classifier")["val_auc"].median().sort_values(ascending=False).index[0]
-        )
-        model_name_mapping = {
-            "SVM": "SVM",
-            "Logistic Regression": "LogisticRegression",
-            "Random Forest": "RandomForest",
-            "Naive Bayes": "NaiveBayes",
-            "KNN": "KNN",
-            "Gradient Boosting": "GradientBoosting",
-        }
-        best_model_cli_name = model_name_mapping[best_model_name]
+        best_model_row = choose_best_classifier(summary_df)
+        best_model_name = best_model_row["Classifier"]
+        best_model_cli_name = MODEL_NAME_TO_CLI_NAME[best_model_name]
         fine_tune_script = Path(__file__).resolve().parent / "3_retrain_best_model_and_evaluate.py"
         fine_tune_cmd = [
             sys.executable,
@@ -1431,7 +1637,25 @@ def main():
             "--search_n_jobs",
             str(args.search_n_jobs),
         ]
-        log_progress(f"Running fine-tuning for the best classifier: {best_model_name}")
+        if args.experiment_name:
+            fine_tune_cmd.extend(["--experiment_name", sanitize_experiment_name(args.experiment_name)])
+        selection_summary_path = experiment_dir / "best_model_selection_summary.txt"
+        with selection_summary_path.open("w", encoding="utf-8") as file_handle:
+            file_handle.write("Best-model selection based on aggregated patient-level OOF AUC\n\n")
+            for _, row in summary_df.sort_values(
+                by=["oof_auc", "oof_auc_ci_low", "val_auc_median"],
+                ascending=[False, False, False],
+            ).iterrows():
+                file_handle.write(
+                    f"{row['Classifier']}: OOF AUC={row['oof_auc']:.4f} "
+                    f"[{row['oof_auc_ci_low']:.4f}, {row['oof_auc_ci_high']:.4f}] | "
+                    f"median fold AUC={row['val_auc_median']:.4f}\n"
+                )
+        log_progress(
+            f"Running fine-tuning for the best classifier selected by aggregated patient-level OOF AUC: "
+            f"{best_model_name} | OOF AUC={best_model_row['oof_auc']:.4f} "
+            f"[{best_model_row['oof_auc_ci_low']:.4f}, {best_model_row['oof_auc_ci_high']:.4f}]"
+        )
         subprocess.call(fine_tune_cmd)
 
 

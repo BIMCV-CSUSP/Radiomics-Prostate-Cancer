@@ -1,70 +1,294 @@
-# Estructura de archivos y metodología en radiómica
+# Flujo de trabajo de radiómica
 
-## Estructura de archivos
+Esta carpeta contiene la rama de radiómica del proyecto. El objetivo es clasificar cáncer de próstata clínicamente significativo (`csPCa`) a partir de RM multiparamétrica (`T2W`, `ADC`, `DWI/HBV`) usando características radiómicas y modelos clásicos de aprendizaje automático.
 
+La etiqueta binaria objetivo es:
+
+- `0`: no clínicamente significativo
+- `1`: clínicamente significativo (`ISUP >= 2`)
+
+## Estructura
+
+```text
+├── 1_extract_radiomics
+│   ├── extract_radiomics.py
+│   ├── Params_T2w.yaml
+│   ├── Params_ADC.yaml
+│   └── Params_DWI.yaml
+└── 2_modeling
+    ├── 0_build_concatenated_feature_table.py
+    ├── 1_train_and_evaluate.py
+    ├── 2_model_differences.py
+    ├── 2a_gland_vs_full_differences.py
+    └── 3_retrain_best_model_and_evaluate.py
 ```
-├───1_extract_radiomics
-│   ├── extract_radiomics.py                    # Script para extracción de características radiómicas
-│   ├── Params_ADC.yaml                         # Parámetros de extracción para la secuencia ADC
-│   ├── Params_DWI.yaml                         # Parámetros de extracción para la secuencia DWI
-│   └── Params_T2w.yaml                         # Parámetros de extracción para la secuencia T2W
-└───2_modeling
-    ├── 1_train_and_evaluate.py                 # Entrenamiento y validación inicial de modelos
-    ├── 2_model_differences.py                  # Comparación entre diferentes modelos entrenados
-    └── 3_retrain_best_model_and_evaluate.py    # Retrain del mejor modelo y evaluación final
-```
 
-## Metodología
+## Paso a paso del pipeline
 
-El proceso de extracción y análisis radiómico se divide en tres fases principales:
+### 1. Extraer características radiómicas por modalidad
 
-### 1. Extracción de características ([`1_extract_radiomics.py`](./1_extract_radiomics/extract_radiomics.py))
+Script: [`1_extract_radiomics/extract_radiomics.py`](./1_extract_radiomics/extract_radiomics.py)
 
-Este script realiza la extracción paralela de características radiómicas:
+El script lee `artifacts/data.csv` y, para cada estudio:
 
-1. **Preprocesamiento de imágenes**
+1. Carga las tres secuencias: `T2W`, `ADC` y `DWI/HBV`.
+2. Carga la máscara de glándula prostática.
+3. Preprocesa cada imagen:
+   - conversión a `float32`
+   - corrección de inhomogeneidad con `N4`
+   - reducción de ruido con difusión anisotrópica
+4. Extrae características con dos enfoques:
+   - `gland`: solo dentro de la glándula prostática
+   - `full`: en toda la imagen usando una máscara de unos
+5. Guarda un CSV por modalidad y por enfoque.
 
-    - Corrección de campo de sesgo N4 para normalizar intensidades no uniformes  
-    - Reducción de ruido mediante filtro de difusión anisotrópica
+Archivos generados en `artifacts/radiomics/`:
 
-2. **Extracción de características**. Se procesan 3 secuencias (T2W, ADC, DWI) con 2 enfoques espaciales:
-
-    * **Enfoque glandular**: análisis limitado a la próstata  
-    * **Enfoque completo**: análisis de toda la imagen
-
-#### Archivos generados
-
-El script produce un total de 6 archivos `.csv`, que se almacenan en [`artifacts/radiomics/`](../../artifacts/radiomics/), cada uno con las características extraídas por secuencia y enfoque:
-
-- `features_t2_gland.csv`  
-- `features_adc_gland.csv`  
-- `features_dwi_gland.csv`  
-- `features_t2_full.csv`  
-- `features_adc_full.csv`  
+- `features_t2_gland.csv`
+- `features_adc_gland.csv`
+- `features_dwi_gland.csv`
+- `features_t2_full.csv`
+- `features_adc_full.csv`
 - `features_dwi_full.csv`
 
-### 2. Fusión de características ([`concatenate_data.ipynb`](../../artifacts/radiomics/concatenate_data.ipynb))
+### 2. Concatenar modalidades en una sola tabla de modelado
 
-Este notebook combina los seis archivos CSV generados en la fase anterior en dos conjuntos unificados:
+Script: [`2_modeling/0_build_concatenated_feature_table.py`](./2_modeling/0_build_concatenated_feature_table.py)
 
-1. **Proceso de fusión**:
-   * Unificación de características por `paciente_estudio`
-   * Adición de prefijos según modalidad (adc_, dwi_, t2_)
-   * Preservación de columnas de identificación y etiquetas
+Este script une los CSV anteriores para construir una tabla final por enfoque espacial:
 
-2. **Archivos generados** en `concatenate_data/`:
-   * `features_all_gland.csv`: Dataset combinado de características de glándula prostática
-   * `features_all_full.csv`: Dataset combinado de características de imagen completa
+- `features_all_gland.csv`
+- `features_all_full.csv`
 
+Qué hace exactamente:
 
-### 3. Construcción, validación y optimización de los modelos
+1. Carga los CSV de `T2`, `ADC` y `DWI`.
+2. Elimina columnas diagnósticas de PyRadiomics (`diagnostics_*`).
+3. Mantiene `patient_id`, `study_id` y `label`.
+4. Añade prefijos por modalidad para evitar colisiones:
+   - `t2_...`
+   - `adc_...`
+   - `dwi_...`
+5. Conserva las variables de forma solo de una modalidad de referencia para no duplicarlas tres veces.
+6. Genera `sample_id = patient_id + "_" + study_id`.
 
-Se entrenan y evalúan distintos clasificadores clásicos utilizando las características extraídas, incorporando un análisis de explicabilidad sobre el modelo con mejor rendimiento.
+## 3. Entrenamiento principal con validación cruzada repetida
 
-1. **Entrenamiento y validación ([`1_train_and_evaluate.py`](./2_modeling/1_train_and_evaluate.py))**. Se entrenan seis clasificadores (SVM, LR, RF, NB, KNN, GB) usando validación cruzada estratificada con grupos, repetida múltiples veces.
+Script: [`2_modeling/1_train_and_evaluate.py`](./2_modeling/1_train_and_evaluate.py)
 
-2. **Comparación estadística ([`2_model_differences.py`](./2_modeling/2_model_differences.py))**. Se evalúan las diferencias de rendimiento entre modelos mediante el test de Friedman y comparaciones post-hoc (Wilcoxon con corrección de Holm).
+Aquí se comparan seis clasificadores:
 
-3. **Optimización y explicabilidad ([`3_retrain_best_model_and_evaluate.py`](./2_modeling/3_retrain_best_model_and_evaluate.py))**. El mejor modelo se refina con búsqueda bayesiana, calibración y análisis de explicabilidad con SHAP y LIME.
+- `SVM`
+- `Logistic Regression`
+- `Random Forest`
+- `Naive Bayes`
+- `KNN`
+- `Gradient Boosting`
 
-Los resultados generados en esta fase se almacenan en la carpeta [`results/radiomics`](../../results/radiomics).
+El protocolo por defecto es:
+
+- `5 folds`
+- `10 repeticiones`
+- agrupamiento por `patient_id`
+
+Eso significa que cada clasificador se evalúa en `50` folds de validación y que nunca deberían quedar estudios del mismo paciente repartidos entre train y validación.
+
+Además, el script genera el plan de folds una sola vez y usa exactamente los mismos folds para todos los modelos. Eso hace que la comparación entre clasificadores sea más justa.
+
+## 4. Cómo se hace la selección de características
+
+Esta es la parte más importante del pipeline y también la que suele generar más confusión.
+
+### Idea principal
+
+La selección de características no se hace una sola vez sobre todo el dataset. Se hace dentro de cada fold usando solo el conjunto de entrenamiento de ese fold.
+
+Eso evita leakage. En otras palabras:
+
+- la validación no participa en la selección
+- la validación solo se usa al final para medir rendimiento
+
+### Secuencia exacta dentro de cada fold
+
+Si se usa `--feature_strategy most_discriminant`, el código hace esto:
+
+1. Toma solo las columnas numéricas radiómicas.
+2. Elimina metadatos y columnas no válidas para modelado:
+   - `patient_id`
+   - `study_id`
+   - `label`
+   - `sample_id`
+   - `mask_type`
+   - columnas `diagnostics_*`
+3. Se queda únicamente con el conjunto de entrenamiento del fold actual.
+4. Puntúa cada característica de forma univariada:
+   - descarta variables sin variación o con demasiados valores inválidos
+   - intenta comprobar normalidad
+   - si la distribución parece aproximadamente normal, usa `t-test`
+   - si no, usa `Mann-Whitney U`
+   - además calcula `AUC` univariado para ordenar las variables
+   - calcula también un umbral óptimo univariado con índice de Youden
+5. Corrige los `p-values` por comparaciones múltiples con Benjamini-Hochberg.
+   - si hay variables con `q <= fdr_alpha`, esas forman el pool preferido
+   - si no sobrevive ninguna, el script usa como respaldo las variables válidas ordenadas por relevancia univariada
+6. Calcula cuántas variables puede permitirse conservar en ese fold.
+   - no es un número fijo rígido
+   - depende del tamaño del entrenamiento
+   - depende también del número de casos de la clase minoritaria
+   - esto busca no seleccionar demasiadas variables para la cantidad de datos disponible
+7. Elimina redundancia por correlación.
+   - ordena las variables candidatas por relevancia
+   - recorre la lista de forma greedily
+   - si una variable está muy correlacionada con otra ya aceptada, se descarta
+   - por defecto usa correlación absoluta de Pearson con umbral `0.90`
+8. Se queda con las mejores variables restantes hasta alcanzar el límite permitido.
+9. Entrena el clasificador con ese subconjunto.
+10. Evalúa en la partición de validación de ese fold.
+
+### Qué implica esto en la práctica
+
+- El conjunto de variables puede cambiar de un fold a otro.
+- Eso no es un error; es lo esperable cuando la selección se hace correctamente dentro de cada train fold.
+- Como el plan de folds y la selección se calculan una vez y luego se reutilizan en todos los modelos, todos los clasificadores compiten bajo las mismas condiciones.
+
+### Qué archivos deja la selección de características
+
+En `results/radiomics/<feature_strategy>/<mode>/feature_selection/` se guardan salidas como:
+
+- `selected_features_by_fold.csv`: detalle completo por fold
+- `feature_selection_frequency.csv`: frecuencia con que aparece cada variable
+- `top_selected_features.txt`: variables más estables por clasificador
+- `recommended_features_by_classifier.txt`: lista resumida por clasificador
+
+Esto sirve para responder dos preguntas distintas:
+
+- qué variables usó realmente el modelo en cada fold
+- qué variables fueron más estables a través de los folds
+
+## 5. Qué pasa después de entrenar los `5 folds x 10 repeticiones`
+
+Después de terminar los 50 folds por clasificador, el script no se detiene. Hace varias cosas más.
+
+### a. Guarda resultados fold a fold
+
+Se exportan métricas de train y validación por fold:
+
+- `AUC`
+- `F1`
+- `balanced accuracy`
+- `MCC`
+- `kappa`
+- `sensibilidad`
+- `especificidad`
+- `PPV`
+- `NPV`
+
+También guarda las predicciones de validación y la lista de variables usadas en cada fold.
+
+### b. Construye predicciones out-of-fold
+
+Primero genera una tabla plana con una fila por caso validado. Luego agrega las predicciones repetidas.
+
+Esto es importante porque con `10` repeticiones un mismo caso entra a validación varias veces. El script entonces:
+
+1. junta todas esas predicciones
+2. promedia la probabilidad predicha de clase positiva por caso y por clasificador
+3. aplica el umbral de clasificación, por defecto `0.5`
+
+El resultado es una predicción agregada `out-of-fold` por caso.
+
+### c. Resume el rendimiento a nivel paciente
+
+Con esas predicciones agregadas calcula métricas globales más estables y genera:
+
+- `summary_metrics.csv`
+- `auc_ci_summary.csv`
+- curvas ROC agregadas
+- matrices de confusión agregadas
+
+Además hace bootstrap estratificado a nivel paciente para obtener intervalos de confianza.
+
+### d. Compara estadísticamente los clasificadores
+
+Si activas `--calculate_differences`, se ejecuta [`2_model_differences.py`](./2_modeling/2_model_differences.py):
+
+- Friedman para diferencia global entre modelos
+- Wilcoxon pareado con corrección de Holm para comparaciones por pares
+
+Si quieres comparar `gland` contra `full`, puedes usar [`2a_gland_vs_full_differences.py`](./2_modeling/2a_gland_vs_full_differences.py).
+
+## 6. Qué se hace después con el mejor modelo
+
+Script: [`2_modeling/3_retrain_best_model_and_evaluate.py`](./2_modeling/3_retrain_best_model_and_evaluate.py)
+
+Una vez identificas el clasificador con mejor rendimiento, el pipeline pasa a una etapa final más parecida a evaluación definitiva.
+
+### Flujo de esta etapa
+
+1. Hace un split final `80/20` por grupos (`GroupShuffleSplit`).
+2. Vuelve a hacer selección de características usando solo el `train` de ese split final.
+3. Restringe `train` y `test` a esas variables.
+4. Optimiza hiperparámetros con `BayesSearchCV` usando folds agrupados dentro del train.
+5. Guarda el mejor estimador entrenado.
+6. Evalúa el modelo no calibrado en el hold-out test.
+7. Calcula intervalos de confianza por bootstrap en el test.
+8. Calibra probabilidades con Platt scaling (`sigmoid`).
+9. Vuelve a evaluar el modelo calibrado.
+10. Barre umbrales y reporta el que maximiza `F1`.
+11. Genera explicabilidad con `SHAP` y `LIME` sobre train y test.
+
+### Cómo interpretar esta fase
+
+La validación cruzada repetida sirve para comparar modelos de manera robusta. El hold-out final sirve para:
+
+- refinar el mejor clasificador
+- obtener una evaluación final separada
+- producir un modelo interpretable y exportable
+
+## Salidas principales
+
+Dependiendo de las opciones, en `results/radiomics/<feature_strategy>/<mode>/` aparecen:
+
+- métricas por fold
+- predicciones por fold
+- predicciones `out-of-fold` planas y agregadas
+- selección de características por fold
+- resumen agregado con intervalos de confianza
+- curvas ROC
+- comparación estadística entre modelos
+- carpeta del mejor modelo reentrenado con:
+  - `best_estimator.pkl`
+  - `report.txt`
+  - curvas de calibración
+  - matrices de confusión
+  - explicabilidad `SHAP` y `LIME`
+
+## Ejemplo de ejecución
+
+```bash
+python train/radiomics/2_modeling/1_train_and_evaluate.py \
+  --csv features_all_gland.csv \
+  --data_pre artifacts/radiomics \
+  --results_base results/radiomics \
+  --feature_strategy most_discriminant \
+  --n_splits 5 \
+  --n_repeats 10 \
+  --bootstrap_iterations 1000 \
+  --ci_level 0.95 \
+  --classification_threshold 0.5 \
+  --min_features 10 \
+  --max_features_cap 60 \
+  --samples_per_feature 25 \
+  --minority_samples_per_feature 8 \
+  --fdr_alpha 0.05 \
+  --correlation_threshold 0.90 \
+  --selection_n_jobs 8 \
+  --search_n_jobs 8 \
+  --search_iterations 50 \
+  --calculate_differences \
+  --fine_tune_best_model
+```
+
+## Nota metodológica importante
+
+En el script final de hold-out, el barrido de umbral se hace sobre el propio conjunto de test. Eso puede servir como análisis exploratorio, pero si el objetivo es reportar una evaluación final estrictamente no sesgada, el umbral debería fijarse dentro de entrenamiento o en una validación adicional, no en el test final.
