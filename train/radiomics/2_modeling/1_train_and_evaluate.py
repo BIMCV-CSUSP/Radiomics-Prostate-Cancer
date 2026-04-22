@@ -240,6 +240,35 @@ def save_cached_fold_plan(cache_path: Path, fold_plan: list[dict], selection_rec
     )
 
 
+def load_resume_state(resume_path: Path) -> dict:
+    """Load a saved per-model training checkpoint."""
+
+    return joblib.load(resume_path)
+
+
+def save_resume_state(
+    resume_path: Path,
+    *,
+    all_results: list[dict],
+    predictions_data: list[dict],
+    feature_selection_records: list[dict],
+    completed_model_names: list[str],
+) -> None:
+    """Persist enough state to resume training from the next unfinished model."""
+
+    resume_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(
+        {
+            "all_results": all_results,
+            "predictions_data": predictions_data,
+            "feature_selection_records": feature_selection_records,
+            "completed_model_names": completed_model_names,
+        },
+        resume_path,
+        compress=3,
+    )
+
+
 def summarize_fold_plan(fold_plan: list[dict], sample_ids: np.ndarray) -> pd.DataFrame:
     """Create a compact summary of the grouped folds, including validation-set signatures."""
 
@@ -1392,6 +1421,11 @@ def main():
             "directory. Useful after plot-only or post-processing failures."
         ),
     )
+    parser.add_argument(
+        "--ignore_resume_state",
+        action="store_true",
+        help="Ignore any per-model resume checkpoint and start model training from the first model.",
+    )
     args = parser.parse_args()
 
     data_root = (PROJECT_ROOT / args.data_pre).resolve()
@@ -1494,9 +1528,11 @@ def main():
         all_results = []
         predictions_data = []
         feature_selection_records = []
+        completed_model_names: list[str] = []
         models = get_models(random_state=DEFAULT_BASE_RANDOM_STATE)
         num_models = len(models)
         live_results_path = experiment_dir / f"results_live_{csv_stem}_{args.feature_strategy}.csv"
+        resume_state_path = experiment_dir / f"resume_state_{csv_stem}_{args.feature_strategy}.joblib"
         log_progress(f"Live fold-metrics snapshot will be updated at: {live_results_path}")
         cache_root = (PROJECT_ROOT / args.selection_cache_dir).resolve()
         fold_plan_cache_key = build_fold_plan_cache_key(
@@ -1564,7 +1600,24 @@ def main():
                 f"inner_splits={args.tune_inner_splits}, scoring=roc_auc, groups=patient_id"
             )
 
+        if resume_state_path.exists() and not args.ignore_resume_state:
+            log_progress(f"Loading resume checkpoint from: {resume_state_path}")
+            resume_state = load_resume_state(resume_state_path)
+            all_results = resume_state.get("all_results", [])
+            predictions_data = resume_state.get("predictions_data", [])
+            feature_selection_records = resume_state.get("feature_selection_records", [])
+            completed_model_names = resume_state.get("completed_model_names", [])
+            log_progress(
+                f"Resume state loaded | completed_models={len(completed_model_names)}/{num_models} | "
+                f"fold_rows={len(all_results)} | prediction_bundles={len(predictions_data)}"
+            )
+        elif args.ignore_resume_state:
+            log_progress("Ignoring any saved resume checkpoint and starting from the first model.")
+
         for model_index, (model_name, model) in enumerate(models, start=1):
+            if model_name in completed_model_names:
+                log_progress(f"Skipping already completed model {model_index}/{num_models}: {model_name}")
+                continue
             log_progress(f"Starting model {model_index}/{num_models}: {model_name}")
             model_param_dist = param_distributions_by_model.get(model_name) if args.tune else None
             if args.tune and model_param_dist is None:
@@ -1610,6 +1663,15 @@ def main():
                 f"median_val_auc={format_metric(model_results_df['val_auc'].median())} | "
                 f"mean_val_bal_acc={format_metric(model_results_df['val_balanced_accuracy'].mean())}"
             )
+            completed_model_names.append(model_name)
+            save_resume_state(
+                resume_path=resume_state_path,
+                all_results=all_results,
+                predictions_data=predictions_data,
+                feature_selection_records=feature_selection_records,
+                completed_model_names=completed_model_names,
+            )
+            log_progress(f"Saved resume checkpoint to: {resume_state_path}")
 
         df_results = pd.DataFrame(all_results)
         fixed_columns = ["Classifier", "Fold", "Repeat"]
@@ -1704,6 +1766,10 @@ def main():
                 for feature_name in X.columns:
                     file_handle.write(f"{feature_name}\n")
             log_progress(f"Saved feature list to: {variables_path}")
+
+        if resume_state_path.exists():
+            resume_state_path.unlink()
+            log_progress(f"Removed completed resume checkpoint: {resume_state_path}")
 
     roc_dir = experiment_dir / "roc_curves"
     save_roc_plots(df_results=df_results, df_predictions=df_predictions, roc_dir=roc_dir)
