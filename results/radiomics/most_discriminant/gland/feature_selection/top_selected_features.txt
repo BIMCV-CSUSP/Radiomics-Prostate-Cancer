@@ -1,0 +1,132 @@
+Gradient Boosting
+  - dwi_square_ngtdm_Strength | selected 50 times | mean AUC=0.7420 | mean p-value=5.5430e-34 | mean q-value=2.3275e-30
+  - dwi_log-sigma-3-mm-3D_firstorder_Skewness | selected 50 times | mean AUC=0.7214 | mean p-value=1.4691e-30 | mean q-value=2.0483e-27
+  - dwi_exponential_glcm_Imc1 | selected 50 times | mean AUC=0.7143 | mean p-value=4.2707e-29 | mean q-value=3.0682e-26
+  - dwi_exponential_ngtdm_Strength | selected 50 times | mean AUC=0.7114 | mean p-value=1.6586e-27 | mean q-value=1.1362e-24
+  - dwi_exponential_glszm_GrayLevelNonUniformityNormalized | selected 50 times | mean AUC=0.7106 | mean p-value=5.6965e-27 | mean q-value=2.9900e-24
+  - dwi_square_firstorder_Skewness | selected 50 times | mean AUC=0.7086 | mean p-value=1.7826e-27 | mean q-value=1.1389e-24
+  - dwi_square_ngtdm_Busyness | selected 50 times | mean AUC=0.7016 | mean p-value=6.9301e-25 | mean q-value=2.2770e-22
+  - dwi_exponential_firstorder_Skewness | selected 50 times | mean AUC=0.6996 | mean p-value=7.9103e-25 | mean q-value=2.2617e-22
+  - dwi_square_glrlm_GrayLevelNonUniformity | selected 50 times | mean AUC=0.6991 | mean p-value=2.2444e-24 | mean q-value=2.9646e-22
+  - dwi_exponential_glcm_ClusterProminence | selected 50 times | mean AUC=0.6981 | mean p-value=1.0179e-24 | mean q-value=2.8273e-22
+  - dwi_exponential_glrlm_GrayLevelVariance | selected 50 times | mean AUC=0.6973 | mean p-value=1.9046e-24 | mean q-value=4.4642e-22
+  - dwi_exponential_gldm_SmallDependenceHighGrayLevelEmphasis | selected 50 times | mean AUC=0.6973 | mean p-value=1.6988e-24 | mean q-value=3.7836e-22
+  - dwi_wavelet2-LL_glcm_ClusterShade | selected 50 times | mean AUC=0.6909 | mean p-value=5.9665e-22 | mean q-value=4.3156e-20
+  - dwi_log-sigma-2-mm-3D_firstorder_Kurtosis | selected 50 times | mean AUC=0.6891 | mean p-value=3.2443e-22 | mean q-value=3.1488e-20
+  - dwi_square_firstorder_Kurtosis | selected 50 times | mean AUC=0.6870 | mean p-value=3.0542e-22 | mean q-value=2.8383e-20
+  - dwi_log-sigma-3-mm-3D_ngtdm_Busyness | selected 50 times | mean AUC=0.6861 | mean p-value=1.9408e-20 | mean q-value=9.6959e-19
+  - dwi_square_glcm_MCC | selected 50 times | mean AUC=0.6821 | mean p-value=2.2257e-21 | mean q-value=1.6278e-19
+  - dwi_exponential_glszm_SizeZoneNonUniformityNormalized | selected 50 times | mean AUC=0.6810 | mean p-value=8.8923e-21 | mean q-value=6.3023e-19
+  - dwi_log-sigma-3-mm-3D_firstorder_Kurtosis | selected 49 times | mean AUC=0.7069 | mean p-value=6.8026e-27 | mean q-value=3.3675e-24
+  - dwi_wavelet2-LL_ngtdm_Strength | selected 49 times | mean AUC=0.7007 | mean p-value=4.2019e-24 | mean q-value=8.0600e-22
+
+KNN
+  - dwi_square_ngtdm_Strength | selected 50 times | mean AUC=0.7420 | mean p-value=5.5430e-34 | mean q-value=2.3275e-30
+  - dwi_log-sigma-3-mm-3D_firstorder_Skewness | selected 50 times | mean AUC=0.7214 | mean p-value=1.4691e-30 | mean q-value=2.0483e-27
+  - dwi_exponential_glcm_Imc1 | selected 50 times | mean AUC=0.7143 | mean p-value=4.2707e-29 | mean q-value=3.0682e-26
+  - dwi_exponential_ngtdm_Strength | selected 50 times | mean AUC=0.7114 | mean p-value=1.6586e-27 | mean q-value=1.1362e-24
+  - dwi_exponential_glszm_GrayLevelNonUniformityNormalized | selected 50 times | mean AUC=0.7106 | mean p-value=5.6965e-27 | mean q-value=2.9900e-24
+  - dwi_square_firstorder_Skewness | selected 50 times | mean AUC=0.7086 | mean p-value=1.7826e-27 | mean q-value=1.1389e-24
+  - dwi_square_ngtdm_Busyness | selected 50 times | mean AUC=0.7016 | mean p-value=6.9301e-25 | mean q-value=2.2770e-22
+  - dwi_exponential_firstorder_Skewness | selected 50 times | mean AUC=0.6996 | mean p-value=7.9103e-25 | mean q-value=2.2617e-22
+  - dwi_square_glrlm_GrayLevelNonUniformity | selected 50 times | mean AUC=0.6991 | mean p-value=2.2444e-24 | mean q-value=2.9646e-22
+  - dwi_exponential_glcm_ClusterProminence | selected 50 times | mean AUC=0.6981 | mean p-value=1.0179e-24 | mean q-value=2.8273e-22
+  - dwi_exponential_glrlm_GrayLevelVariance | selected 50 times | mean AUC=0.6973 | mean p-value=1.9046e-24 | mean q-value=4.4642e-22
+  - dwi_exponential_gldm_SmallDependenceHighGrayLevelEmphasis | selected 50 times | mean AUC=0.6973 | mean p-value=1.6988e-24 | mean q-value=3.7836e-22
+  - dwi_wavelet2-LL_glcm_ClusterShade | selected 50 times | mean AUC=0.6909 | mean p-value=5.9665e-22 | mean q-value=4.3156e-20
+  - dwi_log-sigma-2-mm-3D_firstorder_Kurtosis | selected 50 times | mean AUC=0.6891 | mean p-value=3.2443e-22 | mean q-value=3.1488e-20
+  - dwi_square_firstorder_Kurtosis | selected 50 times | mean AUC=0.6870 | mean p-value=3.0542e-22 | mean q-value=2.8383e-20
+  - dwi_log-sigma-3-mm-3D_ngtdm_Busyness | selected 50 times | mean AUC=0.6861 | mean p-value=1.9408e-20 | mean q-value=9.6959e-19
+  - dwi_square_glcm_MCC | selected 50 times | mean AUC=0.6821 | mean p-value=2.2257e-21 | mean q-value=1.6278e-19
+  - dwi_exponential_glszm_SizeZoneNonUniformityNormalized | selected 50 times | mean AUC=0.6810 | mean p-value=8.8923e-21 | mean q-value=6.3023e-19
+  - dwi_log-sigma-3-mm-3D_firstorder_Kurtosis | selected 49 times | mean AUC=0.7069 | mean p-value=6.8026e-27 | mean q-value=3.3675e-24
+  - dwi_wavelet2-LL_ngtdm_Strength | selected 49 times | mean AUC=0.7007 | mean p-value=4.2019e-24 | mean q-value=8.0600e-22
+
+Logistic Regression
+  - dwi_square_ngtdm_Strength | selected 50 times | mean AUC=0.7420 | mean p-value=5.5430e-34 | mean q-value=2.3275e-30
+  - dwi_log-sigma-3-mm-3D_firstorder_Skewness | selected 50 times | mean AUC=0.7214 | mean p-value=1.4691e-30 | mean q-value=2.0483e-27
+  - dwi_exponential_glcm_Imc1 | selected 50 times | mean AUC=0.7143 | mean p-value=4.2707e-29 | mean q-value=3.0682e-26
+  - dwi_exponential_ngtdm_Strength | selected 50 times | mean AUC=0.7114 | mean p-value=1.6586e-27 | mean q-value=1.1362e-24
+  - dwi_exponential_glszm_GrayLevelNonUniformityNormalized | selected 50 times | mean AUC=0.7106 | mean p-value=5.6965e-27 | mean q-value=2.9900e-24
+  - dwi_square_firstorder_Skewness | selected 50 times | mean AUC=0.7086 | mean p-value=1.7826e-27 | mean q-value=1.1389e-24
+  - dwi_square_ngtdm_Busyness | selected 50 times | mean AUC=0.7016 | mean p-value=6.9301e-25 | mean q-value=2.2770e-22
+  - dwi_exponential_firstorder_Skewness | selected 50 times | mean AUC=0.6996 | mean p-value=7.9103e-25 | mean q-value=2.2617e-22
+  - dwi_square_glrlm_GrayLevelNonUniformity | selected 50 times | mean AUC=0.6991 | mean p-value=2.2444e-24 | mean q-value=2.9646e-22
+  - dwi_exponential_glcm_ClusterProminence | selected 50 times | mean AUC=0.6981 | mean p-value=1.0179e-24 | mean q-value=2.8273e-22
+  - dwi_exponential_glrlm_GrayLevelVariance | selected 50 times | mean AUC=0.6973 | mean p-value=1.9046e-24 | mean q-value=4.4642e-22
+  - dwi_exponential_gldm_SmallDependenceHighGrayLevelEmphasis | selected 50 times | mean AUC=0.6973 | mean p-value=1.6988e-24 | mean q-value=3.7836e-22
+  - dwi_wavelet2-LL_glcm_ClusterShade | selected 50 times | mean AUC=0.6909 | mean p-value=5.9665e-22 | mean q-value=4.3156e-20
+  - dwi_log-sigma-2-mm-3D_firstorder_Kurtosis | selected 50 times | mean AUC=0.6891 | mean p-value=3.2443e-22 | mean q-value=3.1488e-20
+  - dwi_square_firstorder_Kurtosis | selected 50 times | mean AUC=0.6870 | mean p-value=3.0542e-22 | mean q-value=2.8383e-20
+  - dwi_log-sigma-3-mm-3D_ngtdm_Busyness | selected 50 times | mean AUC=0.6861 | mean p-value=1.9408e-20 | mean q-value=9.6959e-19
+  - dwi_square_glcm_MCC | selected 50 times | mean AUC=0.6821 | mean p-value=2.2257e-21 | mean q-value=1.6278e-19
+  - dwi_exponential_glszm_SizeZoneNonUniformityNormalized | selected 50 times | mean AUC=0.6810 | mean p-value=8.8923e-21 | mean q-value=6.3023e-19
+  - dwi_log-sigma-3-mm-3D_firstorder_Kurtosis | selected 49 times | mean AUC=0.7069 | mean p-value=6.8026e-27 | mean q-value=3.3675e-24
+  - dwi_wavelet2-LL_ngtdm_Strength | selected 49 times | mean AUC=0.7007 | mean p-value=4.2019e-24 | mean q-value=8.0600e-22
+
+Naive Bayes
+  - dwi_square_ngtdm_Strength | selected 50 times | mean AUC=0.7420 | mean p-value=5.5430e-34 | mean q-value=2.3275e-30
+  - dwi_log-sigma-3-mm-3D_firstorder_Skewness | selected 50 times | mean AUC=0.7214 | mean p-value=1.4691e-30 | mean q-value=2.0483e-27
+  - dwi_exponential_glcm_Imc1 | selected 50 times | mean AUC=0.7143 | mean p-value=4.2707e-29 | mean q-value=3.0682e-26
+  - dwi_exponential_ngtdm_Strength | selected 50 times | mean AUC=0.7114 | mean p-value=1.6586e-27 | mean q-value=1.1362e-24
+  - dwi_exponential_glszm_GrayLevelNonUniformityNormalized | selected 50 times | mean AUC=0.7106 | mean p-value=5.6965e-27 | mean q-value=2.9900e-24
+  - dwi_square_firstorder_Skewness | selected 50 times | mean AUC=0.7086 | mean p-value=1.7826e-27 | mean q-value=1.1389e-24
+  - dwi_square_ngtdm_Busyness | selected 50 times | mean AUC=0.7016 | mean p-value=6.9301e-25 | mean q-value=2.2770e-22
+  - dwi_exponential_firstorder_Skewness | selected 50 times | mean AUC=0.6996 | mean p-value=7.9103e-25 | mean q-value=2.2617e-22
+  - dwi_square_glrlm_GrayLevelNonUniformity | selected 50 times | mean AUC=0.6991 | mean p-value=2.2444e-24 | mean q-value=2.9646e-22
+  - dwi_exponential_glcm_ClusterProminence | selected 50 times | mean AUC=0.6981 | mean p-value=1.0179e-24 | mean q-value=2.8273e-22
+  - dwi_exponential_glrlm_GrayLevelVariance | selected 50 times | mean AUC=0.6973 | mean p-value=1.9046e-24 | mean q-value=4.4642e-22
+  - dwi_exponential_gldm_SmallDependenceHighGrayLevelEmphasis | selected 50 times | mean AUC=0.6973 | mean p-value=1.6988e-24 | mean q-value=3.7836e-22
+  - dwi_wavelet2-LL_glcm_ClusterShade | selected 50 times | mean AUC=0.6909 | mean p-value=5.9665e-22 | mean q-value=4.3156e-20
+  - dwi_log-sigma-2-mm-3D_firstorder_Kurtosis | selected 50 times | mean AUC=0.6891 | mean p-value=3.2443e-22 | mean q-value=3.1488e-20
+  - dwi_square_firstorder_Kurtosis | selected 50 times | mean AUC=0.6870 | mean p-value=3.0542e-22 | mean q-value=2.8383e-20
+  - dwi_log-sigma-3-mm-3D_ngtdm_Busyness | selected 50 times | mean AUC=0.6861 | mean p-value=1.9408e-20 | mean q-value=9.6959e-19
+  - dwi_square_glcm_MCC | selected 50 times | mean AUC=0.6821 | mean p-value=2.2257e-21 | mean q-value=1.6278e-19
+  - dwi_exponential_glszm_SizeZoneNonUniformityNormalized | selected 50 times | mean AUC=0.6810 | mean p-value=8.8923e-21 | mean q-value=6.3023e-19
+  - dwi_log-sigma-3-mm-3D_firstorder_Kurtosis | selected 49 times | mean AUC=0.7069 | mean p-value=6.8026e-27 | mean q-value=3.3675e-24
+  - dwi_wavelet2-LL_ngtdm_Strength | selected 49 times | mean AUC=0.7007 | mean p-value=4.2019e-24 | mean q-value=8.0600e-22
+
+Random Forest
+  - dwi_square_ngtdm_Strength | selected 50 times | mean AUC=0.7420 | mean p-value=5.5430e-34 | mean q-value=2.3275e-30
+  - dwi_log-sigma-3-mm-3D_firstorder_Skewness | selected 50 times | mean AUC=0.7214 | mean p-value=1.4691e-30 | mean q-value=2.0483e-27
+  - dwi_exponential_glcm_Imc1 | selected 50 times | mean AUC=0.7143 | mean p-value=4.2707e-29 | mean q-value=3.0682e-26
+  - dwi_exponential_ngtdm_Strength | selected 50 times | mean AUC=0.7114 | mean p-value=1.6586e-27 | mean q-value=1.1362e-24
+  - dwi_exponential_glszm_GrayLevelNonUniformityNormalized | selected 50 times | mean AUC=0.7106 | mean p-value=5.6965e-27 | mean q-value=2.9900e-24
+  - dwi_square_firstorder_Skewness | selected 50 times | mean AUC=0.7086 | mean p-value=1.7826e-27 | mean q-value=1.1389e-24
+  - dwi_square_ngtdm_Busyness | selected 50 times | mean AUC=0.7016 | mean p-value=6.9301e-25 | mean q-value=2.2770e-22
+  - dwi_exponential_firstorder_Skewness | selected 50 times | mean AUC=0.6996 | mean p-value=7.9103e-25 | mean q-value=2.2617e-22
+  - dwi_square_glrlm_GrayLevelNonUniformity | selected 50 times | mean AUC=0.6991 | mean p-value=2.2444e-24 | mean q-value=2.9646e-22
+  - dwi_exponential_glcm_ClusterProminence | selected 50 times | mean AUC=0.6981 | mean p-value=1.0179e-24 | mean q-value=2.8273e-22
+  - dwi_exponential_glrlm_GrayLevelVariance | selected 50 times | mean AUC=0.6973 | mean p-value=1.9046e-24 | mean q-value=4.4642e-22
+  - dwi_exponential_gldm_SmallDependenceHighGrayLevelEmphasis | selected 50 times | mean AUC=0.6973 | mean p-value=1.6988e-24 | mean q-value=3.7836e-22
+  - dwi_wavelet2-LL_glcm_ClusterShade | selected 50 times | mean AUC=0.6909 | mean p-value=5.9665e-22 | mean q-value=4.3156e-20
+  - dwi_log-sigma-2-mm-3D_firstorder_Kurtosis | selected 50 times | mean AUC=0.6891 | mean p-value=3.2443e-22 | mean q-value=3.1488e-20
+  - dwi_square_firstorder_Kurtosis | selected 50 times | mean AUC=0.6870 | mean p-value=3.0542e-22 | mean q-value=2.8383e-20
+  - dwi_log-sigma-3-mm-3D_ngtdm_Busyness | selected 50 times | mean AUC=0.6861 | mean p-value=1.9408e-20 | mean q-value=9.6959e-19
+  - dwi_square_glcm_MCC | selected 50 times | mean AUC=0.6821 | mean p-value=2.2257e-21 | mean q-value=1.6278e-19
+  - dwi_exponential_glszm_SizeZoneNonUniformityNormalized | selected 50 times | mean AUC=0.6810 | mean p-value=8.8923e-21 | mean q-value=6.3023e-19
+  - dwi_log-sigma-3-mm-3D_firstorder_Kurtosis | selected 49 times | mean AUC=0.7069 | mean p-value=6.8026e-27 | mean q-value=3.3675e-24
+  - dwi_wavelet2-LL_ngtdm_Strength | selected 49 times | mean AUC=0.7007 | mean p-value=4.2019e-24 | mean q-value=8.0600e-22
+
+SVM
+  - dwi_square_ngtdm_Strength | selected 50 times | mean AUC=0.7420 | mean p-value=5.5430e-34 | mean q-value=2.3275e-30
+  - dwi_log-sigma-3-mm-3D_firstorder_Skewness | selected 50 times | mean AUC=0.7214 | mean p-value=1.4691e-30 | mean q-value=2.0483e-27
+  - dwi_exponential_glcm_Imc1 | selected 50 times | mean AUC=0.7143 | mean p-value=4.2707e-29 | mean q-value=3.0682e-26
+  - dwi_exponential_ngtdm_Strength | selected 50 times | mean AUC=0.7114 | mean p-value=1.6586e-27 | mean q-value=1.1362e-24
+  - dwi_exponential_glszm_GrayLevelNonUniformityNormalized | selected 50 times | mean AUC=0.7106 | mean p-value=5.6965e-27 | mean q-value=2.9900e-24
+  - dwi_square_firstorder_Skewness | selected 50 times | mean AUC=0.7086 | mean p-value=1.7826e-27 | mean q-value=1.1389e-24
+  - dwi_square_ngtdm_Busyness | selected 50 times | mean AUC=0.7016 | mean p-value=6.9301e-25 | mean q-value=2.2770e-22
+  - dwi_exponential_firstorder_Skewness | selected 50 times | mean AUC=0.6996 | mean p-value=7.9103e-25 | mean q-value=2.2617e-22
+  - dwi_square_glrlm_GrayLevelNonUniformity | selected 50 times | mean AUC=0.6991 | mean p-value=2.2444e-24 | mean q-value=2.9646e-22
+  - dwi_exponential_glcm_ClusterProminence | selected 50 times | mean AUC=0.6981 | mean p-value=1.0179e-24 | mean q-value=2.8273e-22
+  - dwi_exponential_glrlm_GrayLevelVariance | selected 50 times | mean AUC=0.6973 | mean p-value=1.9046e-24 | mean q-value=4.4642e-22
+  - dwi_exponential_gldm_SmallDependenceHighGrayLevelEmphasis | selected 50 times | mean AUC=0.6973 | mean p-value=1.6988e-24 | mean q-value=3.7836e-22
+  - dwi_wavelet2-LL_glcm_ClusterShade | selected 50 times | mean AUC=0.6909 | mean p-value=5.9665e-22 | mean q-value=4.3156e-20
+  - dwi_log-sigma-2-mm-3D_firstorder_Kurtosis | selected 50 times | mean AUC=0.6891 | mean p-value=3.2443e-22 | mean q-value=3.1488e-20
+  - dwi_square_firstorder_Kurtosis | selected 50 times | mean AUC=0.6870 | mean p-value=3.0542e-22 | mean q-value=2.8383e-20
+  - dwi_log-sigma-3-mm-3D_ngtdm_Busyness | selected 50 times | mean AUC=0.6861 | mean p-value=1.9408e-20 | mean q-value=9.6959e-19
+  - dwi_square_glcm_MCC | selected 50 times | mean AUC=0.6821 | mean p-value=2.2257e-21 | mean q-value=1.6278e-19
+  - dwi_exponential_glszm_SizeZoneNonUniformityNormalized | selected 50 times | mean AUC=0.6810 | mean p-value=8.8923e-21 | mean q-value=6.3023e-19
+  - dwi_log-sigma-3-mm-3D_firstorder_Kurtosis | selected 49 times | mean AUC=0.7069 | mean p-value=6.8026e-27 | mean q-value=3.3675e-24
+  - dwi_wavelet2-LL_ngtdm_Strength | selected 49 times | mean AUC=0.7007 | mean p-value=4.2019e-24 | mean q-value=8.0600e-22
+

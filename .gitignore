@@ -27,6 +27,14 @@ results/radiomics/shared_cache/
 results/**/explicability/
 results/**/SHAP/
 results/**/LIME/
+# Heavy radiomics outputs
+results/**/feature_selection/selected_features_by_fold.csv
+results/**/oof_predictions_flat_*.csv
+results/radiomics/shared_cache/
+results/**/explicability/
+results/**/SHAP/
+results/**/LIME/
+
 
 # Large model and report files
 *.pth
