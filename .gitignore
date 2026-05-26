@@ -41,3 +41,4 @@ results/**/LIME/
 *.pt
 *.pkl
 *.joblib
+results/radiomics/most_discriminant/gland/roc_curves/
